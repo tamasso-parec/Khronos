@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Start the Khronos container with the host repo mounted, so files can be edited from the host.
-# Usage: ./docker_run.sh [path/to/rosbags]   (default: ~/rosbags, mounted at /data)
+# Usage: ./docker_run.sh [path/to/datasets]   (mounted at /data)
+# Default datasets folder: $KHRONOS_DATASETS, else <workspace>/datasets if the repo sits in <workspace>/src/khronos, else ~/rosbags.
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BAG_DIR="$(realpath -m "${1:-$HOME/rosbags}")"
+DEFAULT_BAG_DIR="${KHRONOS_DATASETS:-$REPO_DIR/../../datasets}"
+[ -d "$DEFAULT_BAG_DIR" ] || DEFAULT_BAG_DIR="$HOME/rosbags"
+BAG_DIR="$(realpath -m "${1:-$DEFAULT_BAG_DIR}")"
 IMAGE="${KHRONOS_IMAGE:-khronos:jazzy}"
 
 mkdir -p "$BAG_DIR"

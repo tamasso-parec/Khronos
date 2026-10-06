@@ -52,6 +52,7 @@ namespace khronos {
 class KhronosPipeline : public hydra::HydraRosPipeline {
  public:
   struct Config : public hydra::HydraRosPipeline::Config {
+    bool publish_measurements = false;
     //! Overrides defaults in Hydra for modules and other settings
     Config();
   } const config;

@@ -8,6 +8,8 @@ find_package(ament_cmake REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra)
@@ -16,6 +18,8 @@ endif()
 rosidl_generate_interfaces(
   ${PROJECT_NAME}
   msg/Changes.msg
+  msg/MeasurementFrame.msg
+  msg/MeasurementTrack.msg
   msg/ObjectChange.msg
   msg/SpatioTemporalVisualizerState.msg
   srv/SpatioTemporalVisualizerSetState.srv
@@ -24,6 +28,8 @@ rosidl_generate_interfaces(
   DEPENDENCIES
   builtin_interfaces
   std_msgs
+  sensor_msgs
+  geometry_msgs
 )
 
 #generate_dynamic_reconfigure_options(
