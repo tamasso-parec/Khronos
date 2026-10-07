@@ -1,7 +1,6 @@
 ---
 launch:
   - arg: {name: sim_time_required, default: 'true'}
-  - arg: {name: publish_measurements, default: 'false'}
   # Evaluation
   - arg: {name: evaluate, default: 'true'}
   - arg: {name: output_dir, default: '$(find-pkg-share khronos_ros)/../output'}
@@ -73,7 +72,6 @@ launch:
       file: $(find-pkg-share khronos_ros)/launch/khronos.launch.yaml
       arg:
         - {name: extrinsics, value: $(find-pkg-share hydra)/config/extrinsics/uhumans2.yaml}
-        - {name: publish_measurements, value: $(var publish_measurements)}
         - {name: labelspace_config, value: $(var labelspace_config)}
         - {name: extra_yaml, value: $(var extra_yaml)}
         - {name: output_dir, value: $(var output_dir)}

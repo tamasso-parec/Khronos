@@ -52,7 +52,6 @@
 #include <khronos_msgs/msg/changes.hpp>
 
 #include "khronos_ros/utils/ros_conversions.h"
-#include "khronos_ros/measurement_sink.h"
 #include "khronos_ros/utils/ros_namespaces.h"
 #include "khronos_ros/visualization/active_window_visualizer.h"
 
@@ -70,7 +69,6 @@ void declare_config(KhronosPipeline::Config& config) {
   using namespace config;
   name("KhronosPipeline::Config");
   base<hydra::HydraRosPipeline::Config>(config);
-  field(config.publish_measurements, "publish_measurements");
 }
 
 KhronosPipeline::KhronosPipeline(ianvs::NodeHandle nh)
@@ -94,10 +92,6 @@ void KhronosPipeline::init() {
       }));
 
   if (khronos_active_window_) {
-    if (config.publish_measurements) {
-      khronos_active_window_->addKhronosSink(
-          std::make_shared<MeasurementSink>(nh_ / "~"));
-    }
     // Need to make the nodehandle private to get private topics in the aw_visualizer.
     const auto aw_nh = nh_ / "~" / RosNs::VISUALIZATION;
     khronos_active_window_->addKhronosSink(std::make_shared<ActiveWindowVisualizer>(

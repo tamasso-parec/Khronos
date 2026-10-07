@@ -7,7 +7,6 @@ launch:
   - arg: { name: labelspace_config }
   - arg: { name: extra_yaml, default: "{}" }
   # System Args
-  - arg: { name: publish_measurements, default: "false" }
   - arg: { name: sensor_min_range, default: "0.1" }
   - arg: { name: sensor_max_range, default: "5.0" }
   - arg: { name: sensor_frame, default: "left_cam" }
@@ -51,7 +50,6 @@ launch:
       args: >
         --config-utilities-file $(var input_config)@input
         --config-utilities-file $(var mapper_config)
-        --config-utilities-yaml {publish_measurements: $(var publish_measurements)}
         --config-utilities-file $(var labelspace_config)
         --config-utilities-yaml {robot_id: $(var robot_id), odom_frame: $(var odom_frame), robot_frame: $(var robot_frame), map_frame: $(var map_frame)}
         --config-utilities-yaml {glog_level: $(var min_glog_level), glog_verbosity: $(var verbosity)}

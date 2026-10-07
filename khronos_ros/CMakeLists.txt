@@ -12,7 +12,6 @@ endif()
 option(BUILD_SHARED_LIBS "Build shared libs" ON)
 
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(gflags REQUIRED)
 find_package(hydra_ros REQUIRED)
@@ -30,7 +29,6 @@ add_library(
   src/experiments/experiment_manager.cpp
   src/experiments/experiment_directory.cpp
   src/khronos_pipeline.cpp
-  src/measurement_sink.cpp
   src/visualization/active_window_visualizer.cpp
   src/visualization/visualization_utils.cpp
   src/visualization/spatio_temporal_visualizer.cpp)
@@ -63,19 +61,11 @@ install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 # Install Python scripts
-ament_python_install_package(khronos_measurements)
 install(PROGRAMS
-  scripts/check_measurements.py
-  scripts/record_measurements.py
   src/visualization/spatio_temporal_visualizer_gui.py
   scripts/odom_to_tf.py
   DESTINATION lib/${PROJECT_NAME}
 )
-
-if(BUILD_TESTING)
-  find_package(ament_cmake_pytest REQUIRED)
-  ament_add_pytest_test(measurement_dataset tests/test_measurement_dataset.py)
-endif()
 
 ament_export_targets(${PROJECT_NAME}-targets HAS_LIBRARY_TARGET)
 ament_export_dependencies(gflags hydra_ros khronos khronos_msgs)
