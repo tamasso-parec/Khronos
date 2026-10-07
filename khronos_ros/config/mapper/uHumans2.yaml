@@ -76,6 +76,54 @@ active_window:
     temporal_window: *temporal_window # s
     min_num_observations: 15
 
+  # Object priors. Verifies static tracks in the active window and static scene graph objects
+  # against each frame (present / absent / occluded / unobserved per pixel). Objects whose absent
+  # fraction rises above their baseline are considered moving and seed the motion detector;
+  # pixels matching confidently static objects suppress free-space seeds. Enable with the launch
+  # arg 'use_object_priors:=true'.
+  use_object_priors: false
+  object_priors:
+    use_tracks: true
+    use_scene_graph: true
+    track_overlap: 0.3
+    scene_graph:
+      refresh_period: 1.0 # s
+      vertex_subsampling: 1
+      duplicate_overlap: 0.5
+    track_models:
+      resolution: 0.03 # m
+      max_points: 20000
+      min_observations: 3 # frames
+      max_update_absent_fraction: 0.2
+      min_point_observations: 2 # frames
+      range_edge_threshold: 0.1 # m
+      skip_label_boundary: true
+    verifier:
+      max_range: *max_range # m
+      point_radius: 0.05 # m, about the object mesh vertex spacing
+      max_splat_radius: 6 # px
+      min_tolerance: 0.05 # m
+      tolerance_factor: 0.01 # tau = max(min_tolerance, tolerance_factor * range^2)
+      silhouette_erosion: 2 # px
+      range_edge_threshold: 0.2 # m, <= 0 to disable
+    motion:
+      verbosity: 3 # 3 prints a per-frame summary.
+      min_informative_pixels: 100 # px
+      min_baseline_frames: 5
+      baseline_rate: 0.2
+      min_absent_fraction: 0.15
+      min_absent_increase: 0.15
+      max_baseline: 1.0 # disabled; the displacement check handles poorly modeled objects
+      min_absent_component: 150 # px
+      min_onset_frames: 2
+      enable_seeds: true
+      search_margin: 0.5 # m
+      min_displaced_pixels: 300 # px
+      displacement_requires_free_space: true
+      require_label_match: true
+      enable_suppression: true
+      max_suppression_absent_fraction: 0.1
+
   # (Background) map integration.
   projective_integrator:
     num_threads: *active_window_threads

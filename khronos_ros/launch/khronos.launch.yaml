@@ -14,6 +14,12 @@ launch:
   - arg: { name: evaluate, default: "false" }
   - arg: { name: output_dir, default: "$(find-pkg-share khronos_ros)/../output" }
   - arg: { name: use_gt_frame, default: "true" }
+  # Object priors as motion cues. The loggers write the prior evidence and a per-frame motion
+  # evaluation against the semantic labels to the output dir, with or without priors.
+  - arg: { name: use_object_priors, default: "false" }
+  # Additional mapper settings that override the mapper config, e.g. "{active_window: {...}}".
+  - arg: { name: extra_mapper_yaml, default: "{}" }
+  - let: { name: object_priors_yaml, value: "{active_window: {use_object_priors: $(var use_object_priors), khronos_sinks: [{type: PriorEvidenceLogger, output_file: $(var output_dir)/prior_evidence.csv}, {type: MotionEvaluationLogger, output_file: $(var output_dir)/motion_evaluation.csv, max_range: $(var sensor_max_range)}]}}" }
   # Launch
   - arg: { name: start_visualizer, default: "true" }
   # Debug
@@ -55,6 +61,8 @@ launch:
         --config-utilities-yaml {glog_level: $(var min_glog_level), glog_verbosity: $(var verbosity)}
         --config-utilities-yaml {experiment: {output_dir: $(var output_dir)}}
         --config-utilities-yaml $(var extra_yaml)
+        --config-utilities-yaml $(var object_priors_yaml)
+        --config-utilities-yaml $(var extra_mapper_yaml)
         --config-utilities-yaml {backend: {fix_input_poses: $(var use_gt_frame)}}
         --config-utilities-yaml {input: {inputs: {left_cam: {sensor: {min_range: $(var sensor_min_range), max_range: $(var sensor_max_range), extrinsics: {sensor_frame: $(var sensor_frame)}}}}}}
         --config-utilities-yaml {sensor_frame: $(var sensor_frame)}

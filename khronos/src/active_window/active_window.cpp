@@ -67,6 +67,8 @@ void declare_config(ActiveWindow::Config& config) {
   field(config.extraction_worker, "extraction_worker");
   field(config.mesh_integrator, "mesh_integrator");
   field(config.frame_data_buffer, "frame_data_buffer");
+  field(config.use_object_priors, "use_object_priors");
+  field(config.object_priors, "object_priors");
   field(config.khronos_sinks, "khronos_sinks");
 }
 
@@ -77,6 +79,7 @@ ActiveWindow::ActiveWindow(const Config& config, const OutputQueue::Ptr& output_
       tracking_integrator_(config.tracking_integrator),
       mesh_integrator_(config.mesh_integrator),
       extraction_worker_(config.extraction_worker, config.object_extractor.create()),
+      prior_module_(config.object_priors),
       sinks_(KhronosSink::instantiate(config.khronos_sinks)),
       frame_data_buffer_(config.frame_data_buffer) {
   // Create member processors as specified in the configs.
@@ -105,6 +108,11 @@ ActiveWindow::ActiveWindow(const Config& config, const OutputQueue::Ptr& output_
   }
 }
 
+void ActiveWindow::setPriorSource(hydra::SharedDsgInfo::Ptr source) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  prior_module_.setSceneGraphSource(std::move(source));
+}
+
 std::string ActiveWindow::printInfo() const {
   return config::toString(config) + "\n" + KhronosSink::printSinks(sinks_);
 }
@@ -123,6 +131,11 @@ hydra::ActiveWindowOutput::Ptr ActiveWindow::spinOnce(const hydra::InputPacket& 
   // Create a data package for the given input.
   std::shared_ptr<FrameData> data = createData(input);
 
+  // Verify object priors against the current measurement and derive motion cues.
+  if (config.use_object_priors) {
+    prior_module_.processInput(map_, *data);
+  }
+
   // Detect dynamic points.
   motion_detector_->processInput(map_, *data);
 
@@ -132,6 +145,11 @@ hydra::ActiveWindowOutput::Ptr ActiveWindow::spinOnce(const hydra::InputPacket& 
   // Initialize tracking for new detections and track and associate objects
   // throughout frames.
   tracker_->processInput(*data);
+
+  // Update the object priors of static tracks.
+  if (config.use_object_priors) {
+    prior_module_.update(*data, tracker_->getTracks());
+  }
 
   // Volumetric reconstruction in active window map.
   updateMap(*data);

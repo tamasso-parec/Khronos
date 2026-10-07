@@ -37,6 +37,13 @@ add_library(${PROJECT_NAME}
         src/active_window/object_detection/instance_forwarding.cpp
         src/active_window/object_extraction/mesh_object_extractor.cpp
         src/active_window/object_extraction/object_worker_pool.cpp
+        src/active_window/prior/object_prior_store.cpp
+        src/active_window/prior/motion_evaluation_logger.cpp
+        src/active_window/prior/prior_evidence_logger.cpp
+        src/active_window/prior/prior_module.cpp
+        src/active_window/prior/prior_motion_detector.cpp
+        src/active_window/prior/prior_verifier.cpp
+        src/active_window/prior/track_model_store.cpp
         src/active_window/tracking/external_tracker.cpp
         src/active_window/tracking/max_iou_tracker.cpp
         src/backend/backend.cpp

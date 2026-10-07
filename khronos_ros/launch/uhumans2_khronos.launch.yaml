@@ -9,6 +9,8 @@ launch:
   - arg: {name: use_openset_semantics, default: 'false'}
   - arg: {name: use_gt_frame, default: 'true'}
   - arg: {name: paused, default: 'false'}
+  - arg: {name: use_object_priors, default: 'false'}
+  - arg: {name: extra_mapper_yaml, default: '{}'}
   # Dataset: tesse_cd_office, tesse_cd_apartment
   - arg: {name: dataset, default: tesse_cd_apartment}
   - arg: {name: bag_dir, default: /data}
@@ -78,5 +80,7 @@ launch:
         - {name: evaluate, value: $(var evaluate)}
         - {name: sensor_min_range, value: $(var sensor_min_range)}
         - {name: sensor_max_range, value: $(var sensor_max_range)}
+        - {name: use_object_priors, value: $(var use_object_priors)}
+        - {name: extra_mapper_yaml, value: $(var extra_mapper_yaml)}
   - node: {if: $(var use_gt_frame), pkg: tf2_ros, exec: static_transform_publisher, name: map_static_tf, args: --child-frame-id map --frame-id world}
   - node: {if: $(var use_gt_frame), pkg: tf2_ros, exec: static_transform_publisher, name: odom_static_tf, args: --child-frame-id odom --frame-id map}

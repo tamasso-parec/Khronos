@@ -59,6 +59,7 @@
 #include "khronos/active_window/motion_detection/motion_detector.h"
 #include "khronos/active_window/object_detection/object_detector.h"
 #include "khronos/active_window/object_extraction/object_worker_pool.h"
+#include "khronos/active_window/prior/prior_module.h"
 #include "khronos/active_window/tracking/tracker.h"
 #include "khronos/common/common_types.h"
 
@@ -89,6 +90,11 @@ class ActiveWindow : public hydra::ActiveWindowModule {
     ObjectWorkerPool::Config extraction_worker;
     hydra::MeshIntegratorConfig mesh_integrator;
     FrameDataBuffer::Config frame_data_buffer;
+
+    // If true, verify object priors (static tracks and scene graph objects) against each frame and
+    // use them as motion cues. Scene graph priors require a source set via setPriorSource().
+    bool use_object_priors = false;
+    PriorModule::Config object_priors;
     std::vector<KhronosSink::Factory> khronos_sinks;
 
     // override layer defaults of Hydra
@@ -114,6 +120,13 @@ class ActiveWindow : public hydra::ActiveWindowModule {
    * @param sink The sink to add.
    */
   void addKhronosSink(const KhronosSink::Ptr& sink);
+
+  /**
+   * @brief Set the scene graph to read object priors from. The scene graph must be in the same
+   * (odometry) frame as the active window.
+   * @param source The shared scene graph to read from.
+   */
+  void setPriorSource(hydra::SharedDsgInfo::Ptr source);
 
   // Interaction.
   /**
@@ -173,6 +186,7 @@ class ActiveWindow : public hydra::ActiveWindowModule {
   std::unique_ptr<ObjectDetector> object_detector_;
   std::unique_ptr<Tracker> tracker_;
   ObjectWorkerPool extraction_worker_;
+  PriorModule prior_module_;
 
   std::mutex mutex_;
   KhronosSink::List sinks_;

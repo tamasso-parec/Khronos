@@ -37,6 +37,7 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -51,6 +52,61 @@
 namespace khronos {
 
 using hydra::InputData;
+
+/**
+ * @brief Where an object prior comes from.
+ */
+enum class PriorSource : uint8_t {
+  kSceneGraph = 0,  // Static object in the scene graph that has left the active window.
+  kTrack = 1,       // Static track inside the active window.
+};
+
+/**
+ * @brief State of a pixel covered by a rendered object prior.
+ */
+enum class PriorPixelState : uint8_t {
+  kNone = 0,    // No prior rendered at this pixel.
+  kExcluded,    // Prior rendered but excluded from verification (silhouette or depth edge).
+  kPresent,     // Measurement matches the expected surface.
+  kAbsent,      // Measurement lies behind the expected surface, the ray passes through the object.
+  kOccluded,    // Measurement lies in front of the expected surface.
+  kUnobserved,  // No valid measurement.
+};
+
+/**
+ * @brief Evidence for a single object prior in a single frame.
+ */
+struct PriorObservation {
+  // Source of the prior and its ID: the scene graph node ID or the track ID.
+  PriorSource source = PriorSource::kSceneGraph;
+  uint64_t id = 0;
+  spark_dsg::SemanticLabel semantic_label = 0;
+
+  // Number of pixels per state.
+  int rendered = 0;
+  int excluded = 0;
+  int present = 0;
+  int absent = 0;
+  int occluded = 0;
+  int unobserved = 0;
+
+  // Histogram of measured semantic labels over all present pixels.
+  std::map<int, int> labels;
+
+  // Size of the largest 4-connected patch of absent pixels.
+  int largest_absent_component = 0;
+
+  // Motion state set by the prior motion detector.
+  float baseline = -1.f;  // Running absent fraction while static, -1 if not yet established.
+  bool moving = false;    // Whether motion onset was detected for this prior.
+  int seed_pixels = 0;    // Number of current pixels seeded as dynamic for this prior.
+
+  // Fraction of informative pixels that indicate absence, -1 if there are none.
+  float absentFraction() const {
+    const int informative = present + absent;
+    return informative > 0 ? absent / static_cast<float>(informative) : -1.f;
+  }
+};
 
 /**
  * @brief Data structure that collects also other data to be passed around with
@@ -78,6 +134,29 @@ struct FrameData {
   // needed, the allocation and projective integration (interpolators) need to be updated.
   Image object_image;
   using ObjectImageType = int;
+
+  // Scene graph object priors rendered in this frame and the evidence for each. Images are empty
+  // if prior verification is disabled.
+  std::vector<PriorObservation> prior_observations;
+
+  // Index + 1 into prior_observations of the rendered prior per pixel as 32SC1. 0 indicates none.
+  Image prior_id_image;
+  using PriorIdImageType = int;
+
+  // Expected range of the rendered prior per pixel in meters as 32FC1. Infinity indicates none.
+  Image prior_range_image;
+  using PriorRangeImageType = float;
+
+  // PriorPixelState per pixel as 8UC1.
+  Image prior_state_image;
+  using PriorStateImageType = uint8_t;
+
+  // Pixels of moving priors to be used as motion seeds as 8UC1, non-zero indicates a seed.
+  Image prior_seed_mask;
+
+  // Pixels that match a confidently static prior as 8UC1. Free-space motion seeds are suppressed
+  // where non-zero.
+  Image prior_suppress_mask;
 
   explicit FrameData(const hydra::InputData& input) : input(input) {}
 };

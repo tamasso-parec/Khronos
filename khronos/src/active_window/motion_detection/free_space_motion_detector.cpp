@@ -164,6 +164,8 @@ void FreeSpaceMotionDetector::setUpPointMapPart(const FrameData& data,
   // Identifies for any point the block it falls in and constructs the
   // hash-map block_map mapping each block to the points that
   // fall into the block.
+  const bool has_prior_seeds = !data.prior_seed_mask.empty();
+  const bool has_suppression = !data.prior_suppress_mask.empty();
   for (int v = 0; v < data.input.vertex_map.rows; v++) {
     for (int u = u_start; u < u_stop; u++) {
       const float range = data.input.range_image.at<InputData::RangeType>(v, u);
@@ -194,8 +196,12 @@ void FreeSpaceMotionDetector::setUpPointMapPart(const FrameData& data,
         // the border of the block.
         continue;
       }
+      // Object priors can add seeds for objects that started moving and suppress seeds on points
+      // that match a static object.
       const TrackingVoxel& voxel = block->getVoxel(voxel_index);
-      if (voxel.ever_free) {
+      const bool suppressed = has_suppression && data.prior_suppress_mask.at<uint8_t>(v, u);
+      const bool prior_seed = has_prior_seeds && data.prior_seed_mask.at<uint8_t>(v, u);
+      if ((voxel.ever_free && !suppressed) || prior_seed) {
         voxel_seeds.emplace(block->getGlobalVoxelIndex(voxel_index));
       }
     }

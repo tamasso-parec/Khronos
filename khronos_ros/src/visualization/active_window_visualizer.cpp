@@ -96,6 +96,7 @@ ActiveWindowVisualizer::ActiveWindowVisualizer(const Config& config, const ianvs
   dynamic_image_pub_ = nh_.create_publisher<ImageMsg>("dynamic_image", config.queue_size);
   object_image_pub_ = nh_.create_publisher<ImageMsg>("object_image", config.queue_size);
   semantic_image_pub_ = nh_.create_publisher<ImageMsg>("semantic_image", config.queue_size);
+  prior_image_pub_ = nh_.create_publisher<ImageMsg>("prior_image", config.queue_size);
   object_bb_pub_ = nh_.create_publisher<MarkerArray>("object_bounding_boxes", config.queue_size);
   track_bbox_pub_ = nh_.create_publisher<MarkerArray>("tracking/bounding_box", config.queue_size);
   track_voxels_pub_ = nh_.create_publisher<MarkerArray>("tracking/voxels", config.queue_size);
@@ -145,6 +146,7 @@ void ActiveWindowVisualizer::visualizeAllFrameData(const FrameData& data) const 
   visualizeDynamicImage(data);
   visualizeObjectImage(data);
   visualizeSemanticImage(data);
+  visualizePriorImage(data);
   visualizeObjectBoundingBoxes(data);
   if (use_stamp) {
     stamp_is_set_ = false;
@@ -569,6 +571,49 @@ void ActiveWindowVisualizer::visualizeDynamicImage(const FrameData& data) const 
   }
   msg.header.stamp = rclcpp::Time(data.input.timestamp_ns);
   dynamic_image_pub_->publish(*msg.toImageMsg());
+}
+
+void ActiveWindowVisualizer::visualizePriorImage(const FrameData& data) const {
+  if (prior_image_pub_->get_subscription_count() == 0 || data.prior_state_image.empty()) {
+    return;
+  }
+  Timer timer("visualize/prior_image", stamp_.nanoseconds());
+  // Overlay the verification state of rendered object priors and motion seeds on the color image.
+  cv_bridge::CvImage msg(std_msgs::msg::Header(), "rgb8", data.input.color_image.clone());
+  for (int u = 0; u < msg.image.cols; ++u) {
+    for (int v = 0; v < msg.image.rows; ++v) {
+      Color color = Color::magenta();
+      switch (static_cast<PriorPixelState>(
+          data.prior_state_image.at<FrameData::PriorStateImageType>(v, u))) {
+        case PriorPixelState::kPresent:
+          color = Color::green();
+          break;
+        case PriorPixelState::kAbsent:
+          color = Color::red();
+          break;
+        case PriorPixelState::kOccluded:
+          color = Color::blue();
+          break;
+        case PriorPixelState::kUnobserved:
+          color = Color::yellow();
+          break;
+        case PriorPixelState::kExcluded:
+          color = Color::gray();
+          break;
+        default:
+          if (data.prior_seed_mask.empty() || !data.prior_seed_mask.at<uint8_t>(v, u)) {
+            continue;
+          }
+      }
+      // Pixels seeded as moving by a prior are highlighted.
+      if (!data.prior_seed_mask.empty() && data.prior_seed_mask.at<uint8_t>(v, u)) {
+        color = Color::magenta();
+      }
+      applyColor(color, msg.image.at<cv::Vec3b>(v, u), config.detection_visualization_alpha);
+    }
+  }
+  msg.header.stamp = rclcpp::Time(data.input.timestamp_ns);
+  prior_image_pub_->publish(*msg.toImageMsg());
 }
 
 void ActiveWindowVisualizer::visualizeObjectImage(const FrameData& data) const {

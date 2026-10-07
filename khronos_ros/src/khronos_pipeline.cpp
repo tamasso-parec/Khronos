@@ -92,6 +92,10 @@ void KhronosPipeline::init() {
       }));
 
   if (khronos_active_window_) {
+    // The frontend copies its graph into the shared backend graph under the lock. This is still in
+    // the odometry frame of the active window, unlike the optimized backend_dsg_.
+    khronos_active_window_->setPriorSource(shared_state_->backend_graph);
+
     // Need to make the nodehandle private to get private topics in the aw_visualizer.
     const auto aw_nh = nh_ / "~" / RosNs::VISUALIZATION;
     khronos_active_window_->addKhronosSink(std::make_shared<ActiveWindowVisualizer>(

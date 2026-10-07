@@ -120,6 +120,7 @@ class ActiveWindowVisualizer : public ActiveWindow::KhronosSink {
   void visualizeDynamicImage(const FrameData& data) const;
   void visualizeObjectImage(const FrameData& data) const;
   void visualizeSemanticImage(const FrameData& data) const;
+  void visualizePriorImage(const FrameData& data) const;
   void visualizeObjectBoundingBoxes(const FrameData& data) const;
   void visualizeTrackBoundingBoxes(const Tracks& tracks) const;
   void visualizeTrackVoxels(const Tracks& tracks) const;
@@ -136,6 +137,7 @@ class ActiveWindowVisualizer : public ActiveWindow::KhronosSink {
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamic_image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr object_image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr semantic_image_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr prior_image_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr object_bb_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr track_bbox_pub_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr track_voxels_pub_;
