@@ -1,0 +1,43 @@
+---
+launch:
+  - arg: {name: bag_path, description: Path to the uHumans2 ROS 2 bag directory}
+  - arg: {name: dataset, default: tesse_cd_apartment}
+  - arg: {name: play_rate, default: '0.5'}
+  - arg: {name: paused, default: 'false'}
+  - arg: {name: scoring_mode, default: temporal}
+  - arg: {name: spatial_enabled, default: 'false'}
+  - arg: {name: debug_output, default: 'false'}
+  - arg: {name: rviz, default: 'true'}
+  - arg: {name: output_dir, default: /tmp/khronos_optical_flow_dynamics_test}
+  - arg: {name: mapper_config, default: $(find-pkg-share khronos_ros)/config/mapper/optical_flow_dynamics_test.yaml}
+  - arg: {name: rviz_path, default: $(find-pkg-share khronos_ros)/config/rviz/optical_flow_dynamics_test.rviz}
+
+  # Reuse RGB-D playback, camera calibration and ground-truth TF wiring.
+  - include:
+      file: $(find-pkg-share khronos_ros)/launch/uhumans2_khronos.launch.yaml
+      arg:
+        - {name: bag_path, value: $(var bag_path)}
+        - {name: dataset, value: $(var dataset)}
+        - {name: play_rate, value: $(var play_rate)}
+        - {name: paused, value: $(var paused)}
+        - {name: output_dir, value: $(var output_dir)}
+        - {name: mapper_config, value: $(var mapper_config)}
+        - {name: use_gt_frame, value: 'true'}
+        # The existing ClosedSetImageReceiver still synchronizes GT label images.
+        - {name: use_gt_semantics, value: 'true'}
+        - {name: use_openset_semantics, value: 'false'}
+        - {name: use_object_priors, value: 'false'}
+        - {name: evaluate, value: 'false'}
+        - {name: sim_time_required, value: 'true'}
+        - {name: start_visualizer, value: 'false'}
+        # Override the generic launch's binary-motion/prior evaluation loggers.
+        - {name: extra_mapper_yaml, value: '{active_window: {khronos_sinks: [], dynamics_estimator: {scoring_mode: $(var scoring_mode), spatial_enabled: $(var spatial_enabled), debug_output: $(var debug_output)}}}'}
+
+  - node:
+      if: $(var rviz)
+      pkg: rviz2
+      exec: rviz2
+      name: dynamics_rviz
+      param:
+        - {name: use_sim_time, value: true}
+      args: -d $(var rviz_path)

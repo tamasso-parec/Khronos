@@ -84,6 +84,7 @@ class ActiveWindow : public hydra::ActiveWindowModule {
     hydra::ProjectiveIntegrator::Config projective_integrator;
     TrackingIntegrator::Config tracking_integrator;
     config::VirtualConfig<MotionDetector> motion_detector;
+    config::VirtualConfig<DynamicsEstimator> dynamics_estimator;
     config::VirtualConfig<ObjectDetector> object_detector;
     config::VirtualConfig<Tracker> tracker;
     config::VirtualConfig<ObjectExtractor> object_extractor;
@@ -183,6 +184,7 @@ class ActiveWindow : public hydra::ActiveWindowModule {
   TrackingIntegrator tracking_integrator_;
   hydra::MeshIntegrator mesh_integrator_;
   std::unique_ptr<MotionDetector> motion_detector_;
+  std::unique_ptr<DynamicsEstimator> dynamics_estimator_;
   std::unique_ptr<ObjectDetector> object_detector_;
   std::unique_ptr<Tracker> tracker_;
   ObjectWorkerPool extraction_worker_;

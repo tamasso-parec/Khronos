@@ -15,7 +15,8 @@ find_package(spatial_hash REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(pose_graph_tools REQUIRED)
 find_package(GTSAM REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc video)
+find_package(Boost REQUIRED)
 find_package(spark_dsg REQUIRED)
 find_package(kimera_pgmo REQUIRED)
 find_package(hydra REQUIRED)
@@ -33,6 +34,9 @@ add_library(${PROJECT_NAME}
         src/active_window/integration/object_integrator.cpp
         src/active_window/integration/tracking_integrator.cpp
         src/active_window/motion_detection/free_space_motion_detector.cpp
+        src/active_window/motion_detection/optical_flow_dynamics.cpp
+        src/active_window/motion_detection/motion_uncertainty.cpp
+        src/active_window/motion_detection/temporal_motion_model.cpp
         src/active_window/object_detection/connected_semantics.cpp
         src/active_window/object_detection/instance_forwarding.cpp
         src/active_window/object_extraction/mesh_object_extractor.cpp
@@ -71,7 +75,7 @@ target_include_directories(
         ${OpenCV_INCLUDE_DIRS}
         ${kimera_pgmo_INCLUDE_DIRS}
         ${hydra_INCLUDE_DIRS}
-        PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${tf2_eigen_INCLUE_DIRS}
+        PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${tf2_eigen_INCLUE_DIRS} ${Boost_INCLUDE_DIRS}
 )
 target_link_libraries(
 ${PROJECT_NAME}
@@ -86,6 +90,16 @@ ${PROJECT_NAME}
 )
 set_property(TARGET ${PROJECT_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
 add_library(khronos::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  enable_testing()
+  find_package(GTest REQUIRED)
+  add_executable(test_optical_flow_dynamics
+    tests/test_optical_flow_dynamics.cpp tests/test_motion_uncertainty.cpp
+    tests/test_temporal_motion_model.cpp)
+  target_link_libraries(test_optical_flow_dynamics PRIVATE ${PROJECT_NAME} GTest::gtest_main)
+  add_test(NAME optical_flow_dynamics COMMAND test_optical_flow_dynamics)
+endif()
 
 ##########
 # Export #

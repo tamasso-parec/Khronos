@@ -41,10 +41,12 @@
 #include <cv_bridge/cv_bridge.hpp>
 #include <ianvs/node_handle.h>
 #include <khronos/utils/geometry_utils.h>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <spark_dsg/colormaps.h>
 
 #include "khronos_ros/utils/ros_conversions.h"
 #include "khronos_ros/visualization/visualization_utils.h"
+#include "khronos_ros/visualization/dynamics_visualization.h"
 
 namespace khronos {
 namespace {
@@ -94,6 +96,21 @@ ActiveWindowVisualizer::ActiveWindowVisualizer(const Config& config, const ianvs
   tracking_slice_pub_ = nh_.create_publisher<Marker>("tracking_slice", config.queue_size);
   dynamic_points_pub_ = nh_.create_publisher<Marker>("dynamic_points", config.queue_size);
   dynamic_image_pub_ = nh_.create_publisher<ImageMsg>("dynamic_image", config.queue_size);
+  dynamics_probability_pub_ =
+      nh_.create_publisher<ImageMsg>("dynamics_probability", config.queue_size);
+  dynamics_motion_evidence_pub_ = nh_.create_publisher<ImageMsg>("dynamics_motion_evidence", config.queue_size);
+  dynamics_regularized_pub_ = nh_.create_publisher<ImageMsg>("dynamics_regularized_evidence", config.queue_size);
+  dynamics_evidence_pub_ = nh_.create_publisher<ImageMsg>("dynamics_evidence", config.queue_size);
+  dynamics_reliability_pub_ = nh_.create_publisher<ImageMsg>("dynamics_reliability", config.queue_size);
+  dynamics_validity_pub_ = nh_.create_publisher<ImageMsg>("dynamics_validity", config.queue_size);
+  dynamics_failure_flags_pub_ =
+      nh_.create_publisher<ImageMsg>("dynamics_failure_flags", config.queue_size);
+  dynamics_failures_pub_ =
+      nh_.create_publisher<ImageMsg>("dynamics_failures", config.queue_size);
+  dynamics_track_alive_pub_ =
+      nh_.create_publisher<ImageMsg>("dynamics_track_alive", config.queue_size);
+  dynamics_cloud_pub_ =
+      nh_.create_publisher<sensor_msgs::msg::PointCloud2>("dynamics_cloud", config.queue_size);
   object_image_pub_ = nh_.create_publisher<ImageMsg>("object_image", config.queue_size);
   semantic_image_pub_ = nh_.create_publisher<ImageMsg>("semantic_image", config.queue_size);
   prior_image_pub_ = nh_.create_publisher<ImageMsg>("prior_image", config.queue_size);
@@ -144,6 +161,7 @@ void ActiveWindowVisualizer::visualizeAllFrameData(const FrameData& data) const 
   Timer timer("visualize/active_window/frame_data", stamp_.nanoseconds());
   visualizeDynamicPoints(data);
   visualizeDynamicImage(data);
+  visualizeDynamicsProbability(data);
   visualizeObjectImage(data);
   visualizeSemanticImage(data);
   visualizePriorImage(data);
@@ -281,6 +299,70 @@ void ActiveWindowVisualizer::visualizeTrackPixels(const Tracks& tracks) const {
   if (!msg.markers.empty()) {
     track_pixels_pub_->publish(msg);
   }
+}
+
+void ActiveWindowVisualizer::visualizeDynamicsProbability(const FrameData& data) const {
+  if (!data.dynamics) {
+    return;
+  }
+  const auto& result = *data.dynamics;
+  std_msgs::msg::Header header;
+  header.stamp = rclcpp::Time(result.reference_timestamp_ns);
+  if (result.legacy_mode && dynamics_probability_pub_->get_subscription_count() > 0) {
+    cv_bridge::CvImage image(header, "32FC1", result.probability);
+    dynamics_probability_pub_->publish(*image.toImageMsg());
+  }
+  if (!result.legacy_mode) {
+    const auto publish = [&](const auto& publisher, const std::string& encoding, const cv::Mat& image) {
+      if (publisher->get_subscription_count() > 0) {
+        cv_bridge::CvImage msg(header, encoding, image);
+        publisher->publish(*msg.toImageMsg());
+      }
+    };
+    publish(dynamics_motion_evidence_pub_, "32FC1", result.motion_evidence);
+    publish(dynamics_regularized_pub_, "32FC1", result.regularized_evidence);
+    publish(dynamics_reliability_pub_, "32FC1", result.reliability);
+    publish(dynamics_validity_pub_, "mono8", result.validity);
+    if (dynamics_evidence_pub_->get_subscription_count() > 0) {
+      publish(dynamics_evidence_pub_, "rgb8", dynamicsEvidenceImage(result));
+    }
+  }
+  if (dynamics_failure_flags_pub_->get_subscription_count() > 0) {
+    cv_bridge::CvImage image(header, "16UC1", result.failure_flags);
+    dynamics_failure_flags_pub_->publish(*image.toImageMsg());
+  }
+  if (dynamics_track_alive_pub_->get_subscription_count() > 0) {
+    cv_bridge::CvImage image(header, "mono8", result.track_alive);
+    dynamics_track_alive_pub_->publish(*image.toImageMsg());
+  }
+  if (dynamics_failures_pub_->get_subscription_count() > 0) {
+    cv::Mat colors(result.failure_flags.size(), CV_8UC3, cv::Scalar(0, 0, 0));
+    for (int v = 0; v < colors.rows; ++v) {
+      for (int u = 0; u < colors.cols; ++u) {
+        const auto flags = result.failure_flags.at<uint16_t>(v, u);
+        auto& color = colors.at<cv::Vec3b>(v, u);
+        if (flags & kInvalidReference) {
+          color = cv::Vec3b(128, 128, 128);
+        } else if (flags & (kFlowInconsistent | kOutsideImage | kNonFiniteFlow | kNumericalFailure)) {
+          color = cv::Vec3b(255, 0, 255);
+        } else if (flags & kPoorModelFit) {
+          color = cv::Vec3b(255, 128, 0);
+        } else if (flags & (kLowTexture | kAmbiguousCorrespondence)) {
+          color = cv::Vec3b(255, 255, 0);
+        } else if (flags & (kInvalidDepth | kDepthDiscontinuity | kOutOfRange)) {
+          color = cv::Vec3b(0, 255, 255);
+        }
+      }
+    }
+    cv_bridge::CvImage image(header, "rgb8", colors);
+    dynamics_failures_pub_->publish(*image.toImageMsg());
+  }
+  if (dynamics_cloud_pub_->get_subscription_count() == 0) {
+    return;
+  }
+
+  header.frame_id = config.global_frame_name;
+  dynamics_cloud_pub_->publish(dynamicsCloud(result, header));
 }
 
 void ActiveWindowVisualizer::visualizeTrackingImage(const Tracks& tracks,

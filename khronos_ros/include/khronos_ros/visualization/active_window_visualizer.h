@@ -51,6 +51,7 @@
 #include <khronos/active_window/active_window.h>
 #include <rclcpp/time.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
@@ -118,6 +119,7 @@ class ActiveWindowVisualizer : public ActiveWindow::KhronosSink {
   void visualizeTrackingSlice(const VolumetricMap& map, float robot_height = 0.0f) const;
   void visualizeDynamicPoints(const FrameData& data) const;
   void visualizeDynamicImage(const FrameData& data) const;
+  void visualizeDynamicsProbability(const FrameData& data) const;
   void visualizeObjectImage(const FrameData& data) const;
   void visualizeSemanticImage(const FrameData& data) const;
   void visualizePriorImage(const FrameData& data) const;
@@ -135,6 +137,16 @@ class ActiveWindowVisualizer : public ActiveWindow::KhronosSink {
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr tracking_slice_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr dynamic_points_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamic_image_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_probability_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_motion_evidence_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_regularized_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_evidence_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_reliability_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_validity_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_failure_flags_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_failures_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr dynamics_track_alive_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr dynamics_cloud_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr object_image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr semantic_image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr prior_image_pub_;

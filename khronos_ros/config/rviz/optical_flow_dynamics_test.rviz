@@ -1,0 +1,120 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 35; 35; 35
+    Fixed Frame: world
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Motion evidence (gray unknown, blue static, red moving)
+      Enabled: true
+      Topic:
+        Value: /khronos_node/visualization/dynamics_cloud
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Position Transformer: XYZ
+      Color Transformer: RGB8
+      Channel Name: motion_evidence
+      Autocompute Intensity Bounds: false
+      Min Intensity: 0
+      Max Intensity: 1
+      Use rainbow: false
+      Min Color: 0; 100; 255
+      Max Color: 255; 40; 0
+      Style: Points
+      Size (Pixels): 3
+      Size (m): 0.02
+      Alpha: 1
+      Decay Time: 0
+      Queue Size: 1
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Motion evidence image (reference frame)
+      Enabled: true
+      Topic:
+        Value: /khronos_node/visualization/dynamics_evidence
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Min Value: 0
+      Max Value: 1
+      Normalize Range: false
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Failure evidence (gray no reference, magenta lost, orange poor fit, yellow texture/ambiguous, cyan depth)
+      Enabled: true
+      Topic:
+        Value: /khronos_node/visualization/dynamics_failures
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Name: Tracks still alive
+      Enabled: false
+      Topic:
+        Value: /khronos_node/visualization/dynamics_track_alive
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Name: Raw direct evidence (float)
+      Enabled: false
+      Topic:
+        Value: /khronos_node/visualization/dynamics_motion_evidence
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Min Value: 0
+      Max Value: 1
+      Normalize Range: false
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Name: Observation reliability (heuristic)
+      Enabled: false
+      Topic:
+        Value: /khronos_node/visualization/dynamics_reliability
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Min Value: 0
+      Max Value: 1
+      Normalize Range: false
+      Value: false
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 12
+      Pitch: 0.5
+      Yaw: 0.8
+      Target Frame: left_cam
+      Focal Point: {X: 0, Y: 0, Z: 2}
+Window Geometry:
+  Width: 1400
+  Height: 900

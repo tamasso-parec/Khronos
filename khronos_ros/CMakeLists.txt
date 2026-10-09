@@ -17,6 +17,7 @@ find_package(gflags REQUIRED)
 find_package(hydra_ros REQUIRED)
 find_package(khronos REQUIRED)
 find_package(khronos_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 # ##############################################################################
 # Libraries #
@@ -30,6 +31,7 @@ add_library(
   src/experiments/experiment_directory.cpp
   src/khronos_pipeline.cpp
   src/visualization/active_window_visualizer.cpp
+  src/visualization/dynamics_visualization.cpp
   src/visualization/visualization_utils.cpp
   src/visualization/spatio_temporal_visualizer.cpp)
 target_include_directories(
@@ -38,7 +40,7 @@ target_include_directories(
          "$<INSTALL_INTERFACE:include>"
 )
 target_link_libraries(${PROJECT_NAME} PUBLIC khronos::khronos hydra_ros::hydra_ros PRIVATE cv_bridge::cv_bridge)
-ament_target_dependencies(${PROJECT_NAME} PUBLIC khronos_msgs)
+ament_target_dependencies(${PROJECT_NAME} PUBLIC khronos_msgs sensor_msgs)
 
 # ##############################################################################
 # Executables #
@@ -61,9 +63,24 @@ install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 # Install Python scripts
+if(BUILD_TESTING)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  enable_testing()
+  add_test(NAME evaluate_dynamics_bag
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_CURRENT_SOURCE_DIR}/tests -v)
+  find_package(GTest REQUIRED)
+  add_executable(test_dynamics_visualization tests/test_dynamics_visualization.cpp
+    src/visualization/dynamics_visualization.cpp)
+  target_include_directories(test_dynamics_visualization PRIVATE include)
+  target_link_libraries(test_dynamics_visualization PRIVATE khronos::khronos GTest::gtest_main)
+  ament_target_dependencies(test_dynamics_visualization PUBLIC sensor_msgs)
+  add_test(NAME dynamics_visualization COMMAND test_dynamics_visualization)
+endif()
+
 install(PROGRAMS
   src/visualization/spatio_temporal_visualizer_gui.py
   scripts/odom_to_tf.py
+  scripts/evaluate_dynamics_bag.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

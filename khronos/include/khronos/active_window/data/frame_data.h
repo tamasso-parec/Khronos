@@ -47,6 +47,7 @@
 #include <opencv2/core.hpp>
 
 #include "khronos/active_window/data/measurement_clusters.h"
+#include "khronos/active_window/motion_detection/dynamics_estimator.h"
 #include "khronos/common/common_types.h"
 
 namespace khronos {
@@ -118,6 +119,9 @@ struct FrameData {
 
   // Associated raw input data.
   const InputData input;
+
+  // Optional dynamics estimate, indexed by its own reference frame (not this input).
+  DynamicsEstimate::ConstPtr dynamics;
 
   // Dynamic clusters in this frame.
   std::vector<MeasurementCluster> dynamic_clusters;
