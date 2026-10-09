@@ -15,6 +15,10 @@ float scalar(const cv::Mat& image, int v, int u) {
   return image.empty() ? kNaN : image.at<float>(v, u);
 }
 
+int32_t count(const cv::Mat& image, int v, int u) {
+  return image.empty() ? 0 : image.at<int32_t>(v, u);
+}
+
 uint32_t color(const DynamicsEstimate& result, int v, int u) {
   float score = result.legacy_mode ? scalar(result.probability, v, u)
                                   : scalar(result.regularized_evidence, v, u);
@@ -40,15 +44,15 @@ sensor_msgs::msg::PointCloud2 dynamicsCloud(const DynamicsEstimate& result,
                                            const std_msgs::msg::Header& header) {
   using Field = sensor_msgs::msg::PointField;
   struct Description { const char* name; uint8_t type; };
-  const std::array<Description, 17> core = {{
+  const std::array<Description, 18> core = {{
       {"x", Field::FLOAT32}, {"y", Field::FLOAT32}, {"z", Field::FLOAT32},
       {"probability", Field::FLOAT32}, {"observations", Field::INT32}, {"scoring_mode", Field::UINT32},
       {"motion_evidence", Field::FLOAT32}, {"regularized_evidence", Field::FLOAT32},
       {"reliability", Field::FLOAT32}, {"validity", Field::UINT32}, {"spatial_support", Field::UINT32},
       {"accepted_observations", Field::INT32}, {"temporal_span", Field::FLOAT32},
       {"failure_flags", Field::UINT32}, {"failures", Field::INT32}, {"track_alive", Field::UINT32},
-      {"rgba", Field::UINT32}}};
-  const std::array<Description, 21> debug = {{
+      {"rgba", Field::UINT32}, {"free_space_count", Field::INT32}}};
+  const std::array<Description, 22> debug = {{
       {"flow_error", Field::FLOAT32}, {"residual_norm", Field::FLOAT32}, {"innovation_sigma", Field::FLOAT32},
       {"static_cost", Field::FLOAT32}, {"dynamic_cost", Field::FLOAT32}, {"delta_cost", Field::FLOAT32},
       {"static_fit_cdf", Field::FLOAT32}, {"dynamic_fit_cdf", Field::FLOAT32},
@@ -57,7 +61,7 @@ sensor_msgs::msg::PointCloud2 dynamicsCloud(const DynamicsEstimate& result,
       {"velocity_cov_xx", Field::FLOAT32}, {"velocity_cov_xy", Field::FLOAT32},
       {"velocity_cov_xz", Field::FLOAT32}, {"velocity_cov_yy", Field::FLOAT32},
       {"velocity_cov_yz", Field::FLOAT32}, {"velocity_cov_zz", Field::FLOAT32},
-      {"measurement_sigma", Field::FLOAT32}}};
+      {"measurement_sigma", Field::FLOAT32}, {"visibility_tests", Field::INT32}}};
   sensor_msgs::msg::PointCloud2 cloud;
   cloud.header = header;
   cloud.height = result.reference_points.rows;
@@ -102,6 +106,7 @@ sensor_msgs::msg::PointCloud2 dynamicsCloud(const DynamicsEstimate& result,
       write(result.failure_count.at<int32_t>(v, u));
       write(uint32_t(result.track_alive.at<uint8_t>(v, u) ? 1 : 0));
       write(color(result, v, u));
+      write(count(result.free_space_count, v, u));
       if (result.debug_output) {
         for (const auto* image : {&result.forward_backward_error, &result.residual_norm, &result.innovation_sigma,
                                  &result.static_cost, &result.dynamic_cost, &result.delta_cost,
@@ -115,6 +120,7 @@ sensor_msgs::msg::PointCloud2 dynamicsCloud(const DynamicsEstimate& result,
             : result.velocity_covariance.at<cv::Vec<float, 6>>(v, u);
         for (int i = 0; i < 6; ++i) write(covariance[i]);
         write(scalar(result.measurement_sigma, v, u));
+        write(count(result.visibility_tests, v, u));
       }
     }
   }

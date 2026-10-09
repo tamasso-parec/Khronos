@@ -349,7 +349,7 @@ void ActiveWindowVisualizer::visualizeDynamicsProbability(const FrameData& data)
           color = cv::Vec3b(255, 128, 0);
         } else if (flags & (kLowTexture | kAmbiguousCorrespondence)) {
           color = cv::Vec3b(255, 255, 0);
-        } else if (flags & (kInvalidDepth | kDepthDiscontinuity | kOutOfRange)) {
+        } else if (flags & (kInvalidDepth | kDepthDiscontinuity | kOutOfRange | kOccluded)) {
           color = cv::Vec3b(0, 255, 255);
         }
       }

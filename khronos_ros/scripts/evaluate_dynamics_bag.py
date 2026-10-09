@@ -22,7 +22,7 @@ FAILURES = {
     1: "invalid_reference", 2: "low_texture", 4: "inconsistent_flow",
     8: "outside_image", 16: "invalid_depth", 32: "depth_discontinuity",
     64: "out_of_range", 128: "nonfinite_flow", 256: "numerical_failure", 512: "poor_model_fit",
-    1024: "ambiguous_correspondence",
+    1024: "ambiguous_correspondence", 2048: "occluded",
 }
 FIELD_DTYPES = {1: "i1", 2: "u1", 3: "i2", 4: "u2", 5: "i4", 6: "u4", 7: "f4", 8: "f8"}
 IMAGE_DTYPES = {

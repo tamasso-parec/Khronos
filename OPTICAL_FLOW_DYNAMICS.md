@@ -103,6 +103,45 @@ the camera, or either patch touching the image border) is also ambiguous: withou
 this, flat-surface drift reappeared as red patches along the image border. Untextured moving
 surfaces become unknown, which is honest: their motion is not observable from flow.
 
+### Visibility of the static prediction (temporal mode)
+
+For every valid reference pixel and every later frame, independent of its flow track,
+the static prediction `p_static` and its predicted optical-axis depth `z_pred` are
+compared with the observed 3x3 depth around `p_static`, with the depth-layer
+tolerance `max_depth_jump + depth_jump_relative*z_pred`:
+
+| Observed depth | State | Use |
+| --- | --- | --- |
+| some sample within tolerance | present | none (also consistent with sideways motion) |
+| all valid samples nearer | occluded | the flow observation is skipped as missing evidence (`kOccluded`) |
+| all valid samples farther | free space | violation of the static hypothesis, counted |
+| mixed, < 5 valid, outside image | untestable | none |
+
+Occlusion explains most former false positives next to moving people: their flow
+matches jumped onto the occluder. Depth alone cannot tell an occluder from the same
+surface approaching the camera, so approaching surfaces lose flow evidence once
+they are about one tolerance nearer; receding ones gain free-space evidence.
+
+Free space is decided **a contrario**: under the static hypothesis a violation arises
+only from depth or registration error, at rate `p0 = free_space_false_rate` per test.
+With `n = window_size - 1` tests per window and `N` image pixels, the minimum count is
+the smallest `k` with
+
+```text
+N * P(Binomial(n, p0) >= k) <= free_space_max_false_alarms,
+```
+
+i.e. at most that many expected chance detections per image. Defaults give `k = 3` of
+4 at 720x480; the measured uHumans2 background rate was about 2e-4 per test, so the
+default `p0 = 1e-3` is conservative. Neighboring tests are spatially correlated, so the
+false-alarm bound is approximate. A pixel reaching `k` becomes `kDynamic` with evidence
+`max(flow evidence, 1 - exp(-violations))` and CRF unary
+`max(flow unary, min(crf_max_unary, violations * free_space_log_odds))`. It overrides
+static or missing flow results (a static point cannot be seen through), but not a
+current poor fit to both models, which stays unknown. Counts never decrease and the
+threshold is fixed per window, so a decision does not revert. `free_space_count` and
+`visibility_tests` are exposed per pixel.
+
 Temporal weak texture records a warning and inflates uncertainty, rather than
 stopping the track. The heuristic variance multiplier is:
 
@@ -218,7 +257,12 @@ tracks are insufficient. Coherent tracking drift can still resemble real velocit
 
 ## Optional spatial support
 
-`spatial_enabled` selects a single local pass on the reference grid. Neighbors must
+`spatial_enabled` turns the stage on; `spatial_method` selects `support` (C++ default)
+or `crf` (default in the supplied mapper files and test launch).
+
+### `spatial_method: support`
+
+A single local pass on the reference grid. Neighbors must
 have reliable direct evidence, compatible reference RGB/depth and locally compatible
 velocity. A checked connecting depth path inhibits crossing thin boundaries.
 At least three neighbors and 70% weighted motion/static agreement are required by
@@ -231,6 +275,46 @@ never increases observation count, track reliability or direct validity. It cann
 fill large unsupported regions, and enforces local compatibility rather than a
 single velocity for an entire human. Color/depth similarity cannot guarantee object
 identity for coplanar, similarly colored surfaces.
+
+### `spatial_method: crf`
+
+A binary (moving/static) pairwise CRF on the reference pixel grid; every pixel keeps
+its own value. Each pixel's own fit gives a signed log-odds unary
+
+```text
+moving:  L = reliability * clamp(0.5*(delta_J - motion_penalty),  0.5, crf_max_unary)
+static:  L = reliability * clamp(0.5*(delta_J - motion_penalty), -crf_max_unary, -0.5)
+unknown, unreliable or poor fit:  L = 0
+```
+
+Half the penalized cost difference is a log-likelihood ratio only under the ideal
+Gaussian assumptions; the cap keeps overconfident real-data costs from becoming
+certainty. Pairwise weights use a sparse stencil (8 directions at 1, 3 and 6 px):
+
+```text
+w_ij = exp(-|d_ij|^2 / (2 crf_spatial_sigma^2) - |rgb_i - rgb_j|^2 / (2 spatial_color_sigma^2))
+```
+
+and are zero unless every pixel on the connecting segment continues the same depth
+layer (`max_depth_jump + depth_jump_relative*z`). They depend only on the reference
+frame and are computed once per window. `crf_iterations` synchronous mean-field updates
+
+```text
+q_i = sigmoid(L_i + crf_pairwise_weight * sum_j w_ij (2 q_j - 1) / sum_stencil w_spatial)
+```
+
+let evidence travel about 6 px per iteration along a continuous surface. The
+neighborhood contributes at most `crf_pairwise_weight` nats; with the defaults
+(3 < `crf_max_unary` 4) unanimous neighbors cannot flip a confident direct pixel.
+
+`regularized_evidence` then holds the marginal `q` (0.5 = undecided), not the
+`support` score scale. Pixels with their own evidence get `spatial_support` 1. An
+unknown pixel gets a value (`spatial_support` 2) only when its connected, confident
+neighbor weight `sum_j w_ij |2q_j - 1| / sum_stencil w_spatial` reaches
+`crf_min_support`; otherwise it stays NaN. Raw evidence, validity, reliability and
+counts are untouched. Neighbors share flow and image noise, so the CRF is a smoothness
+prior, not additional independent observations, and the marginal is not a calibrated
+motion probability. Large regions without any connected direct evidence stay unknown.
 
 ## Configuration
 
@@ -254,11 +338,17 @@ the settings below. The supplied mapper files include all new defaults.
 | `aperture_sigma` | 1 | px at `min_texture`; structure-tensor flow uncertainty, 0 disables |
 | `ambiguity_check` | true | skip flow correspondences the static prediction explains equally well |
 | `ambiguity_min_separation` / `photometric_tolerance` | 1 / 3 | px / mean absolute 8-bit gray level over 5x5 patches |
+| `visibility_check` | true | occlusion skipping and free-space evidence |
+| `free_space_false_rate` / `free_space_max_false_alarms` | 0.001 / 1 | per-test chance rate / expected false detections per image |
+| `free_space_log_odds` | 1.5 | nats per violation (CRF unary) |
 | `min_fit_observations` / `min_temporal_span` | 4 / 0.1 | accepted samples including reference / s |
 | `min_reliability` / `max_fit_cdf` | 0.25 / 0.99 | heuristic confidence / approximate fit diagnostic |
 | `motion_penalty` / `motion_score_scale` | 11.345 / 10 | dimensionless |
 | `min_displacement` / `min_displacement_sigma` | 0.02 / 3 | m / standard deviations |
 | `spatial_enabled` / `spatial_radius` | false / 2 | ablation / pixels |
+| `spatial_method` | support | `support` or `crf` (mapper files and launch use `crf`) |
+| `crf_iterations` / `crf_pairwise_weight` / `crf_max_unary` | 5 / 3 / 4 | count / nats / nats |
+| `crf_spatial_sigma` / `crf_min_support` | 4 / 0.2 | px / fraction of stencil weight |
 | `spatial_min_neighbors` / `spatial_motion_fraction` | 3 / 0.7 | count / weighted agreement |
 | `spatial_min_reliability` | 0.6 | minimum direct source reliability |
 | `spatial_color_sigma` / `spatial_velocity_tolerance` | 30 / 1 | RGB8 Euclidean difference / m/s |
@@ -289,7 +379,7 @@ Relative topics under `/khronos_node/visualization/`:
   `scoring_mode` (0 legacy/1 temporal), `motion_evidence`, `regularized_evidence`,
   `reliability`, `validity`, `spatial_support`, `accepted_observations` including
   reference, `temporal_span` in s, cumulative `failure_flags`, `failures`,
-  `track_alive`, and `rgba`. Core layout: 68 bytes/point.
+  `track_alive`, `rgba` and `free_space_count`. Core layout: 72 bytes/point.
 - `dynamics_motion_evidence` / `dynamics_regularized_evidence`: 32FC1 raw/inferred scores.
 - `dynamics_evidence`: RGB8 colored evidence; `dynamics_reliability`: 32FC1 heuristic confidence.
 - `dynamics_validity`: mono8 direct states: 0 unavailable, 1 insufficient, 2 unreliable,
@@ -298,16 +388,17 @@ Relative topics under `/khronos_node/visualization/`:
   Weak texture can be a warning on an accepted temporal observation. Bits are cumulative:
   1 invalid reference, 2 weak texture, 4 inconsistent flow, 8 bounds, 16 invalid depth,
   32 depth discontinuity, 64 range, 128 nonfinite flow, 256 numerical failure,
-  512 poor model fit, 1024 ambiguous correspondence. Failure colors, by priority: gray
-  invalid reference, magenta lost track (bounds, cycle check, nonfinite flow, numerical),
-  orange poor fit to both models, yellow weak texture or ambiguous, cyan depth, black none.
+  512 poor model fit, 1024 ambiguous correspondence, 2048 occluded static prediction.
+  Failure colors, by priority: gray invalid reference, magenta lost track (bounds, cycle
+  check, nonfinite flow, numerical), orange poor fit to both models, yellow weak texture
+  or ambiguous, cyan depth or occlusion, black none.
   Historical flags do not override current validity.
 
 With `debug_output`, the cloud additionally includes flow cycle error (px), last raw
 reference displacement (m), legacy innovation sigma (m), static/dynamic costs,
 improvement, approximate fit CDFs, fitted static XYZ, world velocity XYZ (m/s), its
-six symmetric covariance entries, and temporal measurement sigma (m). Debug layout:
-152 bytes/point. `innovation_sigma` remains a legacy diagnostic; temporal point
+six symmetric covariance entries, temporal measurement sigma (m) and the number of
+conclusive visibility tests. Debug layout: 160 bytes/point. `innovation_sigma` remains a legacy diagnostic; temporal point
 covariance trace is named `measurement_sigma`. No fit CDF is called motion probability.
 C++ snapshots expose the same matrices; fit and velocity-covariance matrices are
 allocated only in debug mode. Velocity itself is retained for local support.
@@ -356,6 +447,37 @@ Estimator-only runtime on the same 720x480 frames (Release build, single thread)
 legacy 92 ms/frame, temporal 175 ms, plus spatial support 189 ms, plus debug output
 200 ms. Neither mode keeps up with 20 Hz input; the replay pipeline queued frames
 and drained them after playback rather than dropping them in these runs.
+
+After the border rule (untestable correspondences are ambiguous) and with the CRF,
+on the 200-frame human segment through the offline harness (regularized output
+counted as moving when > 0.5; background rows over scored pixels, human recall over
+all human pixels):
+
+| Spatial stage | Background scored | Background FPR scored / all | Human recall all / interior | ms/frame |
+| --- | --- | --- | --- | --- |
+| none (raw) | 17.3% | 2.0% / 0.34% | 11.3% / 13.1% | 192 |
+| `support` | 20.3% | 2.1% / 0.42% | 12.0% / 13.5% | 192 |
+| `crf`, `crf_pairwise_weight` 1.5 | 24.6% | 2.5% / 0.61% | 21.6% / 23.2% | 271 |
+| `crf`, 3 (default) | 35.1% | 3.4% / 1.19% | 37.7% / 39.1% | 271 |
+| `crf`, 5 | 45.3% | 4.4% / 1.99% | 50.7% / 51.7% | 271 |
+
+On the static segment, `crf` at 3 raised all-pixel background FPR from 0.29% to 1.08%.
+`crf_pairwise_weight` is the recall/false-positive knob. The CRF adds about 80 ms per
+frame (single thread); the full-sequence table above predates these changes.
+
+Adding the visibility test (defaults, same segments and counting):
+
+| Segment / output | Background FPR scored / all | Human recall all / interior |
+| --- | --- | --- |
+| humans, raw, without -> with visibility | 2.0% / 0.34% -> 1.4% / 0.25% | 11.3% / 13.1% -> 31.2% / 29.1% |
+| humans, `crf` 3, without -> with | 3.4% / 1.19% -> 2.3% / 0.79% | 37.7% / 39.1% -> 53.7% / 52.7% |
+| static, raw, without -> with | 1.5% / 0.29% -> 0.8% / 0.15% | n/a |
+| static, `crf` 3, without -> with | 2.7% / 1.08% -> 1.3% / 0.53% | n/a |
+
+False positives within 10 px of people fell from 21% to 1% of raw background false
+positives. The remainder lies mostly on smooth surfaces where depth says the static
+point is present but appearance changed (e.g. shading or shadows from people), and
+on static depth edges in the camera-motion segment. Visibility adds about 5 ms/frame.
 
 These numbers come from one synthetic sequence with exact poses and depth. They are
 not a calibration and do not transfer automatically to real sensors.

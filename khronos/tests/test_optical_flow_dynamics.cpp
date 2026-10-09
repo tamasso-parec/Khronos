@@ -351,7 +351,8 @@ TEST_F(OpticalFlowDynamicsTest, TemporalJumpAndPoorFitsRemainUnknown) {
     OpticalFlowDynamics estimator(config);
     DynamicsEstimate::ConstPtr result;
     for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, depths[i]));
-    EXPECT_EQ(result->accepted_count.at<int>(48, 64), 5);
+    // The final nearer depth hides the static point: that observation is missing evidence.
+    EXPECT_GE(result->accepted_count.at<int>(48, 64), 4);
     EXPECT_TRUE(std::isnan(result->motion_evidence.at<float>(48, 64)));
     EXPECT_EQ(result->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kUnreliable));
     EXPECT_TRUE(result->failure_flags.at<uint16_t>(48, 64) & kPoorModelFit);
@@ -485,6 +486,42 @@ TEST_F(OpticalFlowDynamicsTest, UntestableBorderCorrespondencesAreAmbiguous) {
   EXPECT_FALSE(result->failure_flags.at<uint16_t>(48, 64) & kAmbiguousCorrespondence);
 }
 
+TEST_F(OpticalFlowDynamicsTest, VisibilitySkipsOcclusionAndDetectsFreeSpace) {
+  config.scoring_mode = "temporal";
+  {
+    // A nearer occluder covers a static point: no motion evidence, only an occlusion flag.
+    OpticalFlowDynamics estimator(config);
+    DynamicsEstimate::ConstPtr result;
+    for (int i = 0; i < 5; ++i) {
+      auto input = frame(1000000000 + i * 50000000);
+      if (i >= 2) input.depth_image(cv::Rect(54, 38, 21, 21)).setTo(1.f);
+      result = estimator.processInput(input);
+    }
+    EXPECT_TRUE(result->failure_flags.at<uint16_t>(48, 64) & kOccluded);
+    EXPECT_EQ(result->free_space_count.at<int>(48, 64), 0);
+    EXPECT_NE(result->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kDynamic));
+  }
+  {
+    // A receding surface: the static point would have to be seen through (free space).
+    color.setTo(cv::Scalar::all(100));
+    OpticalFlowDynamics estimator(config);
+    DynamicsEstimate::ConstPtr result;
+    for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, 2.f + 0.3f * i));
+    EXPECT_EQ(result->visibility_tests.at<int>(48, 64), 4);
+    EXPECT_EQ(result->free_space_count.at<int>(48, 64), 4);
+    EXPECT_EQ(result->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kDynamic));
+    EXPECT_GT(result->motion_evidence.at<float>(48, 64), 0.5);
+  }
+  {
+    // Disabled: no visibility tests are run.
+    config.visibility_check = false;
+    OpticalFlowDynamics estimator(config);
+    DynamicsEstimate::ConstPtr result;
+    for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, 2.f + 0.3f * i));
+    EXPECT_EQ(result->visibility_tests.at<int>(48, 64), 0);
+  }
+}
+
 TEST_F(OpticalFlowDynamicsTest, AmbiguityCheckKeepsDistinguishableMotion) {
   // Textured surface moving against a static camera: the static prediction does not match.
   config.scoring_mode = "temporal";
@@ -493,6 +530,45 @@ TEST_F(OpticalFlowDynamicsTest, AmbiguityCheckKeepsDistinguishableMotion) {
   for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, i * 2.5f));
   EXPECT_FALSE(result->failure_flags.at<uint16_t>(48, 64) & kAmbiguousCorrespondence);
   EXPECT_EQ(result->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kDynamic));
+}
+
+TEST(SpatialDynamicsSupport, CrfFillsSameSurfaceWithoutLeakingOrOverriding) {
+  OpticalFlowDynamics::Config config;
+  config.spatial_enabled = true;
+  config.spatial_method = "crf";
+  const cv::Size size(60, 30);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  DynamicsEstimate estimate;
+  estimate.reference_points = cv::Mat(size, CV_32FC3, cv::Scalar(0, 0, 2));
+  estimate.regularized_evidence = cv::Mat(size, CV_32FC1, cv::Scalar(nan));
+  estimate.spatial_support = cv::Mat::zeros(size, CV_8UC1);
+  cv::Mat colors(size, CV_8UC3, cv::Scalar(100, 100, 100));
+  cv::Mat depths(size, CV_32FC1, cv::Scalar(2));
+  depths.colRange(30, 60).setTo(4);  // Background layer on the right.
+  cv::Mat unary = cv::Mat::zeros(size, CV_32FC1);
+  // Moving surface on the left: direct evidence only on a sparse grid.
+  for (int v = 0; v < 30; v += 4) for (int u = 0; u < 30; u += 4) unary.at<float>(v, u) = 3.f;
+  // A strongly static pixel inside the moving surface keeps its own decision.
+  unary.at<float>(12, 12) = -config.crf_max_unary;
+  // One isolated moving pixel on the background does not convert its unknown neighbors.
+  unary.at<float>(15, 50) = 3.f;
+  applyCrfSupport(estimate, unary, crfWeights(colors, depths, config), config);
+  EXPECT_GT(estimate.regularized_evidence.at<float>(14, 14), 0.5);  // Inferred on the surface.
+  EXPECT_EQ(estimate.spatial_support.at<uint8_t>(14, 14), 2);
+  EXPECT_EQ(estimate.spatial_support.at<uint8_t>(8, 8), 1);
+  EXPECT_LT(estimate.regularized_evidence.at<float>(12, 12), 0.5);
+  for (int v = 0; v < 30; ++v) {  // No leakage across the depth discontinuity.
+    for (int u = 30; u < 45; ++u) {
+      const float value = estimate.regularized_evidence.at<float>(v, u);
+      EXPECT_TRUE(std::isnan(value) || value < 0.5) << v << "," << u;
+    }
+  }
+  EXPECT_GT(estimate.regularized_evidence.at<float>(15, 50), 0.5);
+  EXPECT_FALSE(estimate.regularized_evidence.at<float>(15, 53) > 0.5);
+  estimate.reference_points.at<cv::Vec3f>(0, 59) = cv::Vec3f(nan, nan, nan);
+  applyCrfSupport(estimate, unary, crfWeights(colors, depths, config), config);
+  EXPECT_TRUE(std::isnan(estimate.regularized_evidence.at<float>(0, 59)));
+  EXPECT_TRUE(std::isnan(estimate.regularized_evidence.at<float>(29, 59)));  // Far unsupported.
 }
 
 TEST(SpatialDynamicsSupport, BoundedSinglePassDepthColorAndDirectEvidence) {

@@ -20,6 +20,7 @@ enum DynamicsFailure : uint16_t {
   kNumericalFailure = 256,
   kPoorModelFit = 512,
   kAmbiguousCorrespondence = 1024,  // Image cannot separate flow from the static prediction.
+  kOccluded = 2048,  // Static prediction hidden by a nearer surface: missing evidence.
 };
 
 enum class DynamicsValidity : uint8_t {
@@ -53,6 +54,8 @@ struct DynamicsEstimate {
   cv::Mat accepted_count;     // CV_32SC1, includes valid reference observation.
   cv::Mat temporal_span;      // CV_32FC1, actual accepted-observation baseline [s].
   cv::Mat velocity;           // CV_32FC3, world coordinates [m/s], NaN until fit available.
+  cv::Mat free_space_count;   // CV_32SC1, frames where depth shows free space at the static prediction.
+  cv::Mat visibility_tests;   // CV_32SC1, frames where that visibility test was conclusive.
   // Allocated only with debug_output. Geometry above remains the initial point cloud.
   cv::Mat fitted_point;       // CV_32FC3, static statistical model parameter.
   cv::Mat static_cost, dynamic_cost, delta_cost;  // CV_32FC1, dimensionless.

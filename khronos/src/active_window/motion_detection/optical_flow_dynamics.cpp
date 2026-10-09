@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <Eigen/Cholesky>
+#include <boost/math/distributions/binomial.hpp>
 #include <boost/math/distributions/chi_squared.hpp>
 #include <glog/logging.h>
 #include <opencv2/imgproc.hpp>
@@ -129,6 +130,33 @@ double patchDifference(const cv::Mat& reference, const cv::Vec2f& p_reference,
   return sum / 25.0;
 }
 
+enum class Visibility { kUntestable, kPresent, kOccluded, kFreeSpace };
+
+// Compare predicted optical-axis depth with the observed 3x3 depth around a pixel.
+Visibility visibilityAt(const cv::Mat& depth, const cv::Vec2f& p, double predicted,
+                        const OpticalFlowDynamics::Config& config) {
+  const int x = std::lround(p[0]), y = std::lround(p[1]);
+  if (!std::isfinite(p[0]) || !std::isfinite(p[1]) || x < 1 || y < 1 || x >= depth.cols - 1 ||
+      y >= depth.rows - 1) {
+    return Visibility::kUntestable;
+  }
+  const double tolerance = config.max_depth_jump + config.depth_jump_relative * predicted;
+  int valid = 0, nearer = 0, farther = 0;
+  for (int dy = -1; dy <= 1; ++dy) {
+    for (int dx = -1; dx <= 1; ++dx) {
+      const float z = depth.at<float>(y + dy, x + dx);
+      if (!std::isfinite(z) || z <= 0.f) continue;
+      ++valid;
+      if (std::abs(z - predicted) <= tolerance) return Visibility::kPresent;
+      (z < predicted ? nearer : farther)++;
+    }
+  }
+  if (valid < 5) return Visibility::kUntestable;
+  if (farther == valid) return Visibility::kFreeSpace;
+  if (nearer == valid) return Visibility::kOccluded;
+  return Visibility::kUntestable;
+}
+
 Eigen::Matrix2d flowJacobian(const cv::Mat& flow, const cv::Vec2f& p) {
   const int x = static_cast<int>(p[0]);
   const int y = static_cast<int>(p[1]);
@@ -172,6 +200,10 @@ void declare_config(OpticalFlowDynamics::Config& config) {
   field(config.ambiguity_check, "ambiguity_check");
   field(config.ambiguity_min_separation, "ambiguity_min_separation", "px");
   field(config.photometric_tolerance, "photometric_tolerance", "gray levels");
+  field(config.visibility_check, "visibility_check");
+  field(config.free_space_false_rate, "free_space_false_rate");
+  field(config.free_space_max_false_alarms, "free_space_max_false_alarms");
+  field(config.free_space_log_odds, "free_space_log_odds");
   field(config.min_fit_observations, "min_fit_observations");
   field(config.min_temporal_span, "min_temporal_span");
   field(config.min_reliability, "min_reliability");
@@ -187,6 +219,12 @@ void declare_config(OpticalFlowDynamics::Config& config) {
   field(config.spatial_color_sigma, "spatial_color_sigma");
   field(config.spatial_velocity_tolerance, "spatial_velocity_tolerance");
   field(config.spatial_motion_fraction, "spatial_motion_fraction");
+  field(config.spatial_method, "spatial_method");
+  field(config.crf_iterations, "crf_iterations");
+  field(config.crf_pairwise_weight, "crf_pairwise_weight");
+  field(config.crf_max_unary, "crf_max_unary");
+  field(config.crf_spatial_sigma, "crf_spatial_sigma", "px");
+  field(config.crf_min_support, "crf_min_support");
 
   field(config.window_size, "window_size");
   field(config.min_observations, "min_observations");
@@ -237,6 +275,12 @@ void declare_config(OpticalFlowDynamics::Config& config) {
   check(config.aperture_sigma, GE, 0.0, "aperture_sigma");
   check(config.ambiguity_min_separation, GE, 0.0, "ambiguity_min_separation");
   check(config.photometric_tolerance, GE, 0.0, "photometric_tolerance");
+  checkInRange(config.free_space_false_rate, 0.0, 1.0, "free_space_false_rate", false, false);
+  check(config.free_space_max_false_alarms, GT, 0.0, "free_space_max_false_alarms");
+  check(config.free_space_log_odds, GT, 0.0, "free_space_log_odds");
+  checkCondition(std::isfinite(config.free_space_max_false_alarms) &&
+                     std::isfinite(config.free_space_log_odds),
+                 "free-space parameters must be finite");
   check(config.min_fit_observations, GE, 3, "min_fit_observations");
   checkCondition(config.scoring_mode != "temporal" || config.min_fit_observations <= config.window_size,
                  "temporal min_fit_observations must not exceed window_size");
@@ -255,6 +299,16 @@ void declare_config(OpticalFlowDynamics::Config& config) {
   check(config.spatial_color_sigma, GT, 0.0, "spatial_color_sigma");
   check(config.spatial_velocity_tolerance, GT, 0.0, "spatial_velocity_tolerance");
   checkInRange(config.spatial_motion_fraction, 0.5, 1.0, "spatial_motion_fraction");
+  checkCondition(config.spatial_method == "support" || config.spatial_method == "crf",
+                 "spatial_method must be support or crf");
+  checkInRange(config.crf_iterations, 1, 20, "crf_iterations");
+  check(config.crf_pairwise_weight, GE, 0.0, "crf_pairwise_weight");
+  check(config.crf_max_unary, GT, 0.0, "crf_max_unary");
+  check(config.crf_spatial_sigma, GT, 0.0, "crf_spatial_sigma");
+  checkInRange(config.crf_min_support, 0.0, 1.0, "crf_min_support");
+  checkCondition(std::isfinite(config.crf_pairwise_weight) && std::isfinite(config.crf_max_unary) &&
+                     std::isfinite(config.crf_spatial_sigma) && std::isfinite(config.crf_min_support),
+                 "crf parameters must be finite");
   checkCondition(std::isfinite(config.position_sigma_floor) && std::isfinite(config.depth_jump_relative) &&
                      std::isfinite(config.texture_variance_scale) && std::isfinite(config.fb_variance_scale) && std::isfinite(config.aperture_sigma) &&
                      std::isfinite(config.ambiguity_min_separation) &&
@@ -285,6 +339,8 @@ void OpticalFlowDynamics::reset() {
   previous_texture_.release();
   previous_tensor_.release();
   reference_gray_.release();
+  crf_unary_.release();
+  crf_weights_.clear();
   uncertainties_.clear();
   temporal_models_.clear();
   pixel_covariances_.clear();
@@ -380,6 +436,21 @@ void OpticalFlowDynamics::startWindow(const hydra::InputData& input, const cv::M
     reference_color_ = input.color_image.clone();
     reference_depth_ = input.depth_image.clone();
     reference_gray_ = gray;  // A fresh buffer per input; never written afterwards.
+    crf_unary_ = cv::Mat::zeros(gray.size(), CV_32FC1);
+    crf_weights_.clear();
+    estimate_.free_space_count = cv::Mat::zeros(gray.size(), CV_32SC1);
+    estimate_.visibility_tests = cv::Mat::zeros(gray.size(), CV_32SC1);
+    // A contrario: smallest k whose expected number of chance detections per image is <= eps.
+    const int tests = config.window_size - 1;
+    const boost::math::binomial_distribution<double> chance(tests, config.free_space_false_rate);
+    free_space_min_count_ = tests + 1;  // Unreachable unless some k qualifies.
+    for (int k = 1; k <= tests; ++k) {
+      if (gray.total() * boost::math::cdf(boost::math::complement(chance, k - 1)) <=
+          config.free_space_max_false_alarms) {
+        free_space_min_count_ = k;
+        break;
+      }
+    }
   }
   cv::Mat texture;
   cv::cornerMinEigenVal(gray, texture, 3);
@@ -459,6 +530,20 @@ void OpticalFlowDynamics::track(const hydra::InputData& input, const cv::Mat& gr
 
   for (int v = 0; v < gray.rows; ++v) {
     for (int u = 0; u < gray.cols; ++u) {
+      // Track-free visibility test of the static hypothesis, for every valid reference pixel.
+      Visibility visibility = Visibility::kUntestable;
+      const auto reference_raw = estimate_.reference_points.at<cv::Vec3f>(v, u);
+      if (!estimate_.legacy_mode && config.visibility_check && std::isfinite(reference_raw[0])) {
+        const Eigen::Vector3d c =
+            sensor_T_world * Eigen::Vector3d(reference_raw[0], reference_raw[1], reference_raw[2]);
+        if (c.z() > 0.0) {
+          const cv::Vec2f predicted(camera_config_.fx * c.x() / c.z() + camera_config_.cx,
+                                    camera_config_.fy * c.y() / c.z() + camera_config_.cy);
+          visibility = visibilityAt(input.depth_image, predicted, c.z(), config);
+        }
+        if (visibility != Visibility::kUntestable) ++estimate_.visibility_tests.at<int>(v, u);
+        if (visibility == Visibility::kFreeSpace) ++estimate_.free_space_count.at<int>(v, u);
+      }
       auto& alive = estimate_.track_alive.at<uint8_t>(v, u);
       if (!alive) {
         continue;
@@ -540,6 +625,12 @@ void OpticalFlowDynamics::track(const hydra::InputData& input, const cv::Mat& gr
       }
       const auto reference = estimate_.reference_points.at<cv::Vec3f>(v, u);
       const Eigen::Vector3d reference_point(reference[0], reference[1], reference[2]);
+      if (visibility == Visibility::kOccluded) {
+        // The static point is hidden: a flow match cannot observe it, so this is missing evidence.
+        flags |= kOccluded;
+        ++failures;
+        continue;
+      }
       if (!estimate_.legacy_mode && config.ambiguity_check) {
         // Exact poses predict where a static point must appear. If the image matches that
         // prediction about as well as the flow endpoint, it cannot distinguish the two.
@@ -614,6 +705,31 @@ void OpticalFlowDynamics::track(const hydra::InputData& input, const cv::Mat& gr
   }
   previous_texture_ = texture;
   if (!estimate_.legacy_mode) previous_tensor_ = structureTensor(gray, config.flow_window_size);
+  if (!estimate_.legacy_mode && config.visibility_check) applyFreeSpace();
+}
+
+void OpticalFlowDynamics::applyFreeSpace() {
+  // Runs after the flow fits of this frame. The threshold is fixed per window and counts only
+  // grow, so a pixel never reverts; scoreTemporal rewrites the flow result, this re-applies.
+  for (int v = 0; v < estimate_.free_space_count.rows; ++v) {
+    for (int u = 0; u < estimate_.free_space_count.cols; ++u) {
+      const int violations = estimate_.free_space_count.at<int>(v, u);
+      if (violations < free_space_min_count_) continue;
+      // Flow data that neither model explains stays unknown: free space overrides static or
+      // missing flow evidence, not contradictory evidence.
+      if (estimate_.validity.at<uint8_t>(v, u) == static_cast<uint8_t>(DynamicsValidity::kUnreliable) &&
+          (estimate_.failure_flags.at<uint16_t>(v, u) & kPoorModelFit)) {
+        continue;
+      }
+      auto& score = estimate_.motion_evidence.at<float>(v, u);
+      const float visible = -std::expm1(-static_cast<float>(violations));  // Uncalibrated.
+      score = std::isfinite(score) ? std::max(score, visible) : visible;
+      estimate_.validity.at<uint8_t>(v, u) = static_cast<uint8_t>(DynamicsValidity::kDynamic);
+      auto& unary = crf_unary_.at<float>(v, u);
+      unary = std::max<float>(unary, std::min(config.crf_max_unary,
+                                              violations * config.free_space_log_odds));
+    }
+  }
 }
 
 void OpticalFlowDynamics::scoreTemporal(int v, int u) {
@@ -623,6 +739,8 @@ void OpticalFlowDynamics::scoreTemporal(int v, int u) {
   estimate_.reliability.at<float>(v, u) = fit.reliability;
   auto& state = estimate_.validity.at<uint8_t>(v, u);
   auto& score = estimate_.motion_evidence.at<float>(v, u);
+  auto& unary = crf_unary_.at<float>(v, u);
+  unary = 0.f;
   score = kNaN;
   state = static_cast<uint8_t>(DynamicsValidity::kInsufficient);
   if (config.debug_output) {
@@ -658,16 +776,143 @@ void OpticalFlowDynamics::scoreTemporal(int v, int u) {
   if (dynamic_plausible && meaningful && improvement > config.motion_penalty) {
     score = -std::expm1(-(improvement - config.motion_penalty) / config.motion_score_scale);
     state = static_cast<uint8_t>(DynamicsValidity::kDynamic);
+    // Half the penalized cost difference is a log-likelihood ratio under ideal Gaussian
+    // assumptions; it is capped because correlated real errors make it overconfident.
+    unary = fit.reliability * std::clamp(0.5 * (improvement - config.motion_penalty), 0.5,
+                                         config.crf_max_unary);
   } else if (static_plausible) {
     score = 0.f;
     state = static_cast<uint8_t>(DynamicsValidity::kStatic);
+    unary = fit.reliability * std::clamp(0.5 * (improvement - config.motion_penalty),
+                                         -config.crf_max_unary, -0.5);
   } else {
     estimate_.failure_flags.at<uint16_t>(v, u) |= kPoorModelFit;
   }
 }
 
 void OpticalFlowDynamics::regularizeSpatial() {
-  applySpatialSupport(estimate_, reference_color_, reference_depth_, config);
+  if (!config.spatial_enabled || config.spatial_method == "support") {
+    applySpatialSupport(estimate_, reference_color_, reference_depth_, config);
+    return;
+  }
+  if (crf_weights_.empty()) crf_weights_ = crfWeights(reference_color_, reference_depth_, config);
+  applyCrfSupport(estimate_, crf_unary_, crf_weights_, config);
+}
+
+namespace {
+
+// 8 directions at 1, 3 and 6 px: reach without a dense window; iterations extend it.
+const std::array<cv::Point, kCrfStencilSize>& crfStencil() {
+  static const auto stencil = [] {
+    std::array<cv::Point, kCrfStencilSize> offsets;
+    int i = 0;
+    for (const int d : {1, 3, 6}) {
+      for (const auto& dir : {cv::Point(1, 0), cv::Point(-1, 0), cv::Point(0, 1), cv::Point(0, -1),
+                              cv::Point(1, 1), cv::Point(-1, -1), cv::Point(1, -1), cv::Point(-1, 1)}) {
+        offsets[i++] = dir * d;
+      }
+    }
+    return offsets;
+  }();
+  return stencil;
+}
+
+double crfNormalizer(const OpticalFlowDynamics::Config& config) {
+  double total = 0.0;
+  for (const auto& o : crfStencil()) {
+    total += std::exp(-(o.x * o.x + o.y * o.y) / (2.0 * config.crf_spatial_sigma * config.crf_spatial_sigma));
+  }
+  return total;
+}
+
+}  // namespace
+
+std::vector<float> crfWeights(const cv::Mat& reference_color, const cv::Mat& reference_depth,
+                              const OpticalFlowDynamics::Config& config) {
+  const int rows = reference_depth.rows, cols = reference_depth.cols;
+  std::vector<float> weights(static_cast<size_t>(rows) * cols * kCrfStencilSize, 0.f);
+  const auto& stencil = crfStencil();
+  for (int v = 0; v < rows; ++v) {
+    for (int u = 0; u < cols; ++u) {
+      const float depth = reference_depth.at<float>(v, u);
+      if (!std::isfinite(depth) || depth <= 0.f) continue;
+      const auto color = reference_color.at<cv::Vec3b>(v, u);
+      float* w = &weights[(static_cast<size_t>(v) * cols + u) * kCrfStencilSize];
+      for (int k = 0; k < kCrfStencilSize; ++k) {
+        const int x = u + stencil[k].x, y = v + stencil[k].y;
+        if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
+        // Every pixel on the connecting segment must continue the same depth layer.
+        const int steps = std::max(std::abs(stencil[k].x), std::abs(stencil[k].y));
+        bool connected = true;
+        for (int i = 1; i <= steps && connected; ++i) {
+          const int px = u + stencil[k].x * i / steps, py = v + stencil[k].y * i / steps;
+          const int qx = u + stencil[k].x * (i - 1) / steps, qy = v + stencil[k].y * (i - 1) / steps;
+          const float a = reference_depth.at<float>(py, px), b = reference_depth.at<float>(qy, qx);
+          connected = std::isfinite(a) && a > 0.f &&
+              std::abs(a - b) <= config.max_depth_jump + config.depth_jump_relative * std::min(a, b);
+        }
+        if (!connected) continue;
+        const cv::Vec3d difference = cv::Vec3d(color) - cv::Vec3d(reference_color.at<cv::Vec3b>(y, x));
+        w[k] = std::exp(-(stencil[k].x * stencil[k].x + stencil[k].y * stencil[k].y) /
+                            (2.0 * config.crf_spatial_sigma * config.crf_spatial_sigma) -
+                        difference.dot(difference) /
+                            (2.0 * config.spatial_color_sigma * config.spatial_color_sigma));
+      }
+    }
+  }
+  return weights;
+}
+
+void applyCrfSupport(DynamicsEstimate& estimate, const cv::Mat& unary,
+                     const std::vector<float>& weights, const OpticalFlowDynamics::Config& config) {
+  const int rows = unary.rows, cols = unary.cols;
+  const auto& stencil = crfStencil();
+  const double scale = config.crf_pairwise_weight / crfNormalizer(config);
+  const auto sigmoid = [](double x) { return 1.0 / (1.0 + std::exp(-x)); };
+  cv::Mat q(unary.size(), CV_32FC1), next(unary.size(), CV_32FC1);
+  for (int i = 0; i < rows * cols; ++i) q.ptr<float>()[i] = sigmoid(unary.ptr<float>()[i]);
+  // Synchronous mean-field updates of a binary Potts model with log-odds unaries.
+  const auto message = [&](const cv::Mat& marginal, int v, int u, double& support) {
+    const float* w = &weights[(static_cast<size_t>(v) * cols + u) * kCrfStencilSize];
+    double sum = 0.0;
+    support = 0.0;
+    for (int k = 0; k < kCrfStencilSize; ++k) {
+      if (w[k] <= 0.f) continue;
+      const double vote = 2.0 * marginal.at<float>(v + stencil[k].y, u + stencil[k].x) - 1.0;
+      sum += w[k] * vote;
+      support += w[k] * std::abs(vote);
+    }
+    return sum;
+  };
+  double support;
+  for (int iteration = 0; iteration < config.crf_iterations; ++iteration) {
+    for (int v = 0; v < rows; ++v) {
+      for (int u = 0; u < cols; ++u) {
+        next.at<float>(v, u) = sigmoid(unary.at<float>(v, u) + scale * message(q, v, u, support));
+      }
+    }
+    std::swap(q, next);
+  }
+  const double normalizer = crfNormalizer(config);
+  for (int v = 0; v < rows; ++v) {
+    for (int u = 0; u < cols; ++u) {
+      auto& output = estimate.regularized_evidence.at<float>(v, u);
+      auto& source = estimate.spatial_support.at<uint8_t>(v, u);
+      output = kNaN;
+      source = 0;
+      const auto point = estimate.reference_points.at<cv::Vec3f>(v, u);
+      if (!std::isfinite(point[0])) continue;
+      message(q, v, u, support);
+      if (unary.at<float>(v, u) != 0.f) {
+        source = 1;
+      } else if (support / normalizer >= config.crf_min_support) {
+        source = 2;  // Inferred from connected neighbors; reliability is not upgraded.
+      } else {
+        continue;
+      }
+      output = q.at<float>(v, u);
+    }
+  }
 }
 
 void applySpatialSupport(DynamicsEstimate& estimate, const cv::Mat& reference_color,
@@ -772,6 +1017,8 @@ DynamicsEstimate::ConstPtr OpticalFlowDynamics::snapshot() const {
   result->accepted_count = estimate_.accepted_count.clone();
   result->temporal_span = estimate_.temporal_span.clone();
   result->velocity = estimate_.velocity.clone();
+  result->free_space_count = estimate_.free_space_count.clone();
+  result->visibility_tests = estimate_.visibility_tests.clone();
   result->fitted_point = estimate_.fitted_point.clone();
   result->static_cost = estimate_.static_cost.clone();
   result->dynamic_cost = estimate_.dynamic_cost.clone();
