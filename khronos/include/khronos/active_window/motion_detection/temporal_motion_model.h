@@ -20,9 +20,14 @@ struct TemporalMotionFit {
 // Coordinates are translated by the first accepted point solely for numerical conditioning.
 class TemporalMotionModel {
  public:
-  bool add(const Eigen::Vector3d& point, const Eigen::Matrix3d& covariance,
-           double time_seconds, double reliability);
+  bool add(const Eigen::Vector3d& point,
+           const Eigen::Matrix3d& covariance,
+           double time_seconds,
+           double reliability);
   TemporalMotionFit fit() const;
+  int observations() const { return count_; }
+  double span() const { return last_time_ - first_time_; }
+  double reliability() const { return count_ ? reliability_sum_ / count_ : 0.0; }
 
  private:
   Eigen::Vector3d origin_ = Eigen::Vector3d::Zero();

@@ -97,7 +97,7 @@ ExperimentManager::ExperimentManager(const Config& config,
                                      ianvs::NodeHandle nh,
                                      std::shared_ptr<KhronosPipeline> khronos)
     : config(config::checkValid(config)),
-      data_dir_(config.output_dir, hydra::DataDirectory::Config{true, config.overwrite}),
+      data_dir_(config.output_dir, hydra::DataDirectory::Config{config.overwrite, true}),
       khronos_(std::move(khronos)),
       nh_(nh) {
   // Verify output directory.

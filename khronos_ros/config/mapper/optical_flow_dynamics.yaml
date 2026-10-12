@@ -3,53 +3,6 @@
 active_window:
   dynamics_estimator:
     type: OpticalFlowDynamics
-    scoring_mode: temporal       # legacy: previous fixed-reference chi-square scorer.
-    debug_output: false          # Add fit/velocity diagnostics to the cloud only when needed.
-    position_sigma_floor: 0.001  # m; unmodeled 3D error floor.
-    depth_jump_relative: 0.02    # Relative tolerance for adjacent depth layers.
-    depth_neighborhood_radius: 1 # px; expanded by bounded endpoint uncertainty.
-    texture_variance_scale: 4.0  # Heuristic weak-texture variance inflation.
-    fb_variance_scale: 1.0       # Heuristic cycle-error variance inflation.
-    aperture_sigma: 1.0           # px along a direction at min_texture; 0 disables.
-    ambiguity_check: true          # Skip flow the static prediction explains equally well.
-    ambiguity_min_separation: 1.0  # px between flow endpoint and static prediction.
-    photometric_tolerance: 3.0     # Mean abs 8-bit gray difference over 5x5 patches.
-    visibility_check: true         # Depth at the static prediction: occlusion / free space.
-    free_space_false_rate: 0.001   # Per-test chance rate; ~2e-4 measured on uHumans2.
-    free_space_max_false_alarms: 1.0  # A contrario: expected false detections per image.
-    free_space_log_odds: 1.5       # nats per violation for the CRF unary.
-    min_fit_observations: 4      # Includes the valid reference sample.
-    min_temporal_span: 0.1       # s
-    min_reliability: 0.25
-    max_fit_cdf: 0.99            # Approximate fit-quality gate, not motion probability.
-    motion_penalty: 11.345       # LR-inspired penalty for three additional parameters.
-    motion_score_scale: 10.0
-    min_displacement: 0.02       # m over the accepted span.
-    min_displacement_sigma: 3.0
-    spatial_enabled: false      # Independent ablation switch.
-    spatial_radius: 2            # px; single pass from direct measurements only.
-    spatial_min_neighbors: 3
-    spatial_min_reliability: 0.6
-    spatial_color_sigma: 30.0    # RGB8 Euclidean distance.
-    spatial_velocity_tolerance: 1.0 # m/s, local compatibility.
-    spatial_motion_fraction: 0.7
-    spatial_method: crf           # support: one-pass borrowing; crf: mean-field marginal.
-    crf_iterations: 5
-    crf_pairwise_weight: 3.0      # nats; recall vs false-positive knob.
-    crf_max_unary: 4.0            # nats; cap on a pixel's own log-odds.
-    crf_spatial_sigma: 4.0        # px
-    crf_min_support: 0.2          # Unknown pixels need this much connected confidence.
-    window_size: 5
-    min_observations: 2
-    max_frame_gap: 0.2
-    max_window_duration: 1.0
-    reference_pixel_sigma: 0.5  # Initial pixel localization standard deviation [px].
-    flow_sigma: 0.5             # Per-step optical-flow standard deviation [px].
-    depth_sigma: 0.01           # Depth standard-deviation floor [m].
-    depth_sigma_scale: 0.001    # sigma_z = depth_sigma + depth_sigma_scale*z^2 [1/m].
-    max_forward_backward_error: 1.0
-    max_depth_jump: 0.1
-    min_texture: 0.0001
-    flow_levels: 3
-    flow_window_size: 15
-    flow_iterations: 3
+    # Other settings use validated OpticalFlowDynamics::Config defaults.
+    # See OPTICAL_FLOW_DYNAMICS.md; add overrides here for calibration or ablations.
+    spatial_method: crf  # Used only when spatial_enabled: true is added.

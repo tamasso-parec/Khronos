@@ -1,38 +1,71 @@
 # Optical-flow dynamics evidence
 
 `OpticalFlowDynamics` is an optional `config_utilities`-registered Khronos module.
-It tracks registered RGB-D input through non-overlapping short windows using
-Farneback. It never consults the Khronos map. First-frame world points remain the
-output geometry; temporal mode fits a statistical static point and a velocity
-without modifying that geometry. Results live in `FrameData::dynamics`, reach
-existing sinks, and have no effect on Khronos's binary `dynamic_image` mask.
+It tracks registered RGB-D input with Farneback flow and never consults the Khronos
+map. In temporal mode every input becomes the reference: its pixels are tracked
+backward through a sliding window of recent frames, so the output geometry is the
+current frame's world points. Temporal mode fits a statistical static point and a
+velocity without modifying that geometry. Legacy mode keeps non-overlapping windows
+anchored on their first frame. Results live in `FrameData::dynamics`, reach existing
+sinks, and have no effect on Khronos's binary `dynamic_image` mask.
 
-## Launch and ablation
+## Run and configure
 
-Inside Docker, from `/root/ros2_ws`, after building and sourcing the workspace:
+Inside Docker, build and source the workspace, then run:
 
 ```bash
-# New temporal scorer, direct measurements only (default).
 ros2 launch khronos_ros optical_flow_dynamics_test.launch.yaml \
-  bag_path:=/data/tesse_cd_apartment scoring_mode:=temporal spatial_enabled:=false
-
-# Same scorer, optional local spatial support.
-ros2 launch khronos_ros optical_flow_dynamics_test.launch.yaml \
-  bag_path:=/data/tesse_cd_apartment scoring_mode:=temporal spatial_enabled:=true
-
-# Previous scorer, unchanged hard texture gate and fixed-reference CDF.
-ros2 launch khronos_ros optical_flow_dynamics_test.launch.yaml \
-  bag_path:=/data/tesse_cd_apartment scoring_mode:=legacy spatial_enabled:=false
+  bag_path:=/data/tesse_cd_apartment
 ```
 
-Add `rviz:=false` for headless operation, `play_rate:=0.5` for slower playback, and
-`debug_output:=true` for fit/velocity diagnostics in the cloud. Publishers only
-serialize subscribed topics. Use `dataset:=tesse_cd_office` for the office bag.
-The standalone setup supplies GT poses and disables binary object/motion detection,
+This uses temporal scoring with CRF spatial support, detecting motion on every third
+frame (`keyframe_interval: 3`). Use `rviz:=false` for headless operation or
+`dataset:=tesse_cd_office` for the office bag. Playback defaults to `play_rate:=0.25`;
+this changes playback speed, not sensor timestamps. Faster playback than the pipeline
+can process builds a backlog: Hydra's queues block instead of dropping frames, and
+the output falls further behind the bag. The `active_window/all` row of
+`timing_stats.csv` in the output directory shows the mean per-frame cost; keep it
+below `0.05 s / play_rate`.
+
+Detector settings belong to `active_window.dynamics_estimator` in the mapper YAML.
+To change them, copy the complete test mapper and add the desired overrides:
+
+```bash
+cp "$(ros2 pkg prefix --share khronos_ros)/config/mapper/optical_flow_dynamics_test.yaml" /tmp/dynamics.yaml
+# Edit /tmp/dynamics.yaml, then:
+ros2 launch khronos_ros optical_flow_dynamics_test.launch.yaml \
+  bag_path:=/data/tesse_cd_apartment mapper_config:=/tmp/dynamics.yaml
+```
+
+For example, enable CRF support and diagnostics with this section in that file:
+
+```yaml
+active_window:
+  dynamics_estimator:
+    type: OpticalFlowDynamics
+    spatial_enabled: true
+    spatial_method: crf
+    debug_output: true
+```
+
+Keep the remaining mapper sections from the copied file. For one-pass support, use
+`spatial_method: support`; for the previous scorer, use `scoring_mode: legacy`.
+The former launch arguments `scoring_mode`, `spatial_enabled`, `spatial_method` and
+`debug_output` are now YAML settings only. Launch arguments cover inputs, playback,
+output locations and viewers; they no longer override detector settings in YAML.
+
+The supplied YAML files rely on C++ defaults, retaining only `type` and the preset's
+`spatial_method: crf` override. Every detector option remains available through
+`config_utilities`, with its existing name, default and validation. An existing
+mapper can merge
+[khronos_ros/config/mapper/optical_flow_dynamics.yaml](khronos_ros/config/mapper/optical_flow_dynamics.yaml).
+This small fragment is not a complete replacement for `mapper_config`.
+
+The test setup supplies GT poses and disables binary object/motion detection,
 tracking and change detection. The background Khronos pipeline still runs. Input
 requires RGB, RGB-aligned depth, camera info, GT TF, and GT labels for the existing
-closed-set receiver. An existing mapper can merge
-[khronos_ros/config/mapper/optical_flow_dynamics.yaml](khronos_ros/config/mapper/optical_flow_dynamics.yaml).
+closed-set receiver. Publishers serialize only subscribed topics. Keep
+`debug_output: false` unless fit/velocity diagnostics are needed.
 
 Record outputs into the mounted directory, e.g.:
 
@@ -48,6 +81,65 @@ ApproximateTime and retains the RGB timestamp in `InputData`; the estimator cann
 recover depth/RGB skew after normalization. Correct registration, synchronization,
 rectification and intrinsics are therefore upstream requirements. GT poses include
 `world_T_body * body_T_sensor`; they and calibration are treated as exact.
+
+## Sliding window (temporal mode)
+
+```text
+input        retained history (window_size 5)    reference / output geometry
+frame 4      0 1 2 3 4                            frame 4
+frame 5        1 2 3 4 5                          frame 5
+frame 6          2 3 4 5 6                        frame 6
+```
+
+Each retained frame caches its gray image, depth, texture, structure tensor and the
+flow pair to its predecessor (current-to-previous for tracking, previous-to-current
+for the cycle check). A new input only adds the flow pair to the previous frame; the
+two directions run concurrently. The current frame then starts a fresh reference:
+every valid pixel is tracked back one cached flow at a time, with look-back time
+`t_reference - t_frame` (the reported velocity is negated back to physical time).
+
+Before flow is computed, frames expire once the history would exceed `window_size`
+or `max_window_duration`; an expired interval is never bridged. A gap above
+`max_frame_gap`, a timestamp rewind or duplicate, a sensor/calibration change or
+malformed input clears the history. Outputs are emitted from the first frame;
+fits need `min_fit_observations` accepted samples, so with the defaults evidence
+appears once four frames are retained.
+
+### Keyframes
+
+`keyframe_interval: K` computes flow and texture for every input but detects motion
+only on every K-th input since the history started. Between keyframes the input
+only extends the history and `processInput` returns nullptr, so Khronos publishes
+no dynamics for that frame. A keyframe's estimate is identical to the one every-frame
+detection would produce for that input: the reference is still tracked back through
+every retained frame, so the per-step error model and the observations are unchanged.
+Only the output rate drops (20/K Hz for a 20 Hz camera). Frame-to-frame motion is
+small, so consecutive references mostly repeat each other's evidence. Every input
+still costs its flow pair (about 57 ms at 720x480 with Farneback, texture and tensor),
+which bounds the saving.
+
+### Flow method
+
+`flow_method` selects Farneback (default) or OpenCV's DIS flow (Dense Inverse Search)
+with its `dis_fast` or `dis_medium` preset. Farneback fits local quadratic polynomials
+over a Gaussian window and runs on one thread, so the two directions of a pair run as
+concurrent tasks. DIS matches a sparse grid of overlapping patches with inverse
+compositional Lucas-Kanade, averages them into a dense field and refines it
+variationally; it parallelizes internally, so the two directions run in sequence.
+Everything downstream of the flow fields is unchanged. The noise, cycle-check and
+aperture parameters were tuned with Farneback and have not been retuned for DIS;
+`flow_window_size` still sets the aperture structure-tensor window.
+
+On two 200-frame apartment segments DIS FAST computed a flow pair in 7 ms instead of
+48 ms, scored more of the image and gave fewer background false positives with higher
+human recall (see the [flow comparison](OPTICAL_FLOW_EVALUATION.md#flow-method-comparison-2026-10-12)).
+
+Because the reference is the newest frame, the cloud and its timestamp no longer
+age by up to `window_size - 1` frames as in legacy mode; the remaining delay is
+processing time plus queueing. The price is that each frame re-runs reference setup,
+`window_size - 1` tracking passes, the per-pixel fits and, with the CRF, its pairwise
+weights. Evidence is recomputed from scratch for each reference, so a decision can
+change from one frame to the next as frames enter and leave the window.
 
 ## Measurement conventions and association
 
@@ -105,7 +197,7 @@ surfaces become unknown, which is honest: their motion is not observable from fl
 
 ### Visibility of the static prediction (temporal mode)
 
-For every valid reference pixel and every later frame, independent of its flow track,
+For every valid reference pixel and every other retained frame, independent of its flow track,
 the static prediction `p_static` and its predicted optical-axis depth `z_pred` are
 compared with the observed 3x3 depth around `p_static`, with the depth-layer
 tolerance `max_depth_jump + depth_jump_relative*z_pred`:
@@ -138,9 +230,9 @@ false-alarm bound is approximate. A pixel reaching `k` becomes `kDynamic` with e
 `max(flow evidence, 1 - exp(-violations))` and CRF unary
 `max(flow unary, min(crf_max_unary, violations * free_space_log_odds))`. It overrides
 static or missing flow results (a static point cannot be seen through), but not a
-current poor fit to both models, which stays unknown. Counts never decrease and the
-threshold is fixed per window, so a decision does not revert. `free_space_count` and
-`visibility_tests` are exposed per pixel.
+current poor fit to both models, which stays unknown. Counts are recomputed for each
+reference over the retained frames against a threshold fixed by `window_size`.
+`free_space_count` and `visibility_tests` are exposed per pixel.
 
 Temporal weak texture records a warning and inflates uncertainty, rather than
 stopping the track. The heuristic variance multiplier is:
@@ -222,7 +314,7 @@ translates coordinates by the first accepted point to avoid cancellation, center
 actual timestamps at their mean, and solves 3x3/6x6 systems. It performs no robust
 sample removal or hypothesis-dependent reweighting. Both fits use identical accepted
 samples and covariance weights. Velocity covariance is the velocity block of the
-inverse normal system, computed by solving for the identity; it is conditional on
+inverse normal system, computed by solving for its three columns; it is conditional on
 the assumed measurement covariances. The fitted static point is a statistical
 parameter exposed in debug output, not the visualization geometry.
 
@@ -258,7 +350,7 @@ tracks are insufficient. Coherent tracking drift can still resemble real velocit
 ## Optional spatial support
 
 `spatial_enabled` turns the stage on; `spatial_method` selects `support` (C++ default)
-or `crf` (default in the supplied mapper files and test launch).
+or `crf` (preset in the supplied mapper files).
 
 ### `spatial_method: support`
 
@@ -297,7 +389,7 @@ w_ij = exp(-|d_ij|^2 / (2 crf_spatial_sigma^2) - |rgb_i - rgb_j|^2 / (2 spatial_
 
 and are zero unless every pixel on the connecting segment continues the same depth
 layer (`max_depth_jump + depth_jump_relative*z`). They depend only on the reference
-frame and are computed once per window. `crf_iterations` synchronous mean-field updates
+frame, so temporal mode recomputes them for every input. `crf_iterations` synchronous mean-field updates
 
 ```text
 q_i = sigmoid(L_i + crf_pairwise_weight * sum_j w_ij (2 q_j - 1) / sum_stencil w_spatial)
@@ -318,15 +410,19 @@ motion probability. Large regions without any connected direct evidence stay unk
 
 ## Configuration
 
-All parameters are validated through `config_utilities`. The old `residual_sigma`
-was already replaced by propagated noise parameters; custom configs should use
-the settings below. The supplied mapper files include all new defaults.
+All parameters are declared and validated through `config_utilities` in
+[optical_flow_dynamics_config.cpp](khronos/src/active_window/motion_detection/optical_flow_dynamics_config.cpp).
+Defaults live in [OpticalFlowDynamics::Config](khronos/include/khronos/active_window/motion_detection/optical_flow_dynamics.h).
+The mapper files contain only preset overrides. Noise values are standard deviations;
+calibrate them for the sensor. Older `residual_sigma` settings must use propagated
+noise parameters instead.
 
 | Parameter | Default | Units/meaning |
 | --- | --- | --- |
 | `scoring_mode` | temporal | temporal or legacy |
-| `window_size` / `max_window_duration` | 5 / 1 | frames including reference / seconds |
-| `max_frame_gap` | 0.2 | seconds; gaps/rewinds/duplicates reset the window |
+| `window_size` / `max_window_duration` | 5 / 1 | retained frames including the reference / seconds |
+| `max_frame_gap` | 0.2 | seconds; gaps/rewinds/duplicates clear the history |
+| `keyframe_interval` | 1 | inputs per motion detection, temporal only (test preset: 3) |
 | `reference_pixel_sigma` / `flow_sigma` | 0.5 / 0.5 | pixels, per axis |
 | `depth_sigma` / `depth_sigma_scale` | 0.01 / 0.001 | m / 1/m |
 | `position_sigma_floor` | 0.001 | m; temporal only |
@@ -346,7 +442,7 @@ the settings below. The supplied mapper files include all new defaults.
 | `motion_penalty` / `motion_score_scale` | 11.345 / 10 | dimensionless |
 | `min_displacement` / `min_displacement_sigma` | 0.02 / 3 | m / standard deviations |
 | `spatial_enabled` / `spatial_radius` | false / 2 | ablation / pixels |
-| `spatial_method` | support | `support` or `crf` (mapper files and launch use `crf`) |
+| `spatial_method` | support | `support` or `crf` (mapper presets use `crf`) |
 | `crf_iterations` / `crf_pairwise_weight` / `crf_max_unary` | 5 / 3 / 4 | count / nats / nats |
 | `crf_spatial_sigma` / `crf_min_support` | 4 / 0.2 | px / fraction of stencil weight |
 | `spatial_min_neighbors` / `spatial_motion_fraction` | 3 / 0.7 | count / weighted agreement |
@@ -354,17 +450,19 @@ the settings below. The supplied mapper files include all new defaults.
 | `spatial_color_sigma` / `spatial_velocity_tolerance` | 30 / 1 | RGB8 Euclidean difference / m/s |
 | `debug_output` | false | add fit/velocity diagnostics and debug matrices |
 | `min_observations` | 2 | legacy accepted comparisons after the reference |
-| `flow_levels` / `flow_window_size` / `flow_iterations` | 3 / 15 / 3 | Farneback parameters |
+| `flow_method` | farneback | `farneback`, `dis_fast` or `dis_medium` |
+| `flow_levels` / `flow_window_size` / `flow_iterations` | 3 / 15 / 3 | Farneback parameters; the window also sizes the aperture tensor |
 
 ## Outputs and compatibility
 
 All images and organized-cloud points use **reference pixels**; every snapshot
-retains both reference and latest timestamps in C++. ROS headers retain the
-reference timestamp. Missing evidence is NaN, confident static evidence is zero.
-Colored evidence/RViz uses gray unknown, blue static, red increasing motion evidence.
-Window size/time limits, gaps, rewinds, sensor changes and malformed input reset
-bounded state. Partial windows are emitted; no end-of-stream flush is required. Estimator runtime
-is logged by Hydra's timing recorder as `active_window/dynamics`.
+retains both reference and latest timestamps in C++. ROS headers carry the
+reference timestamp, which in temporal mode is the current input's. Missing evidence
+is NaN, confident static evidence is zero. Colored evidence/RViz uses gray unknown,
+blue static, red increasing motion evidence. History bounds and resets are described
+under [Sliding window](#sliding-window-temporal-mode). Partial windows are emitted; no
+end-of-stream flush is required. Estimator runtime is logged by Hydra's timing
+recorder as `active_window/dynamics`.
 
 `probability` and `/dynamics_probability` are deprecated legacy names. They retain
 the previous fixed-reference approximate CDF only in legacy mode. In temporal mode
@@ -403,84 +501,15 @@ covariance trace is named `measurement_sigma`. No fit CDF is called motion proba
 C++ snapshots expose the same matrices; fit and velocity-covariance matrices are
 allocated only in debug mode. Velocity itself is retained for local support.
 
-State is fixed-size per pixel, independent of window length: temporal sufficient
-statistics plus 2x2 pixel covariance use about 368 bytes/pixel (127 MB at 720x480)
-plus a 12-byte/pixel previous-frame structure tensor,
-in addition to current images and immutable snapshots retained by Khronos's bounded
-frame buffer. Legacy state is 240 bytes/pixel. There are no per-track heap histories
-or dense temporal covariance matrices. Per-frame tracking/fitting is O(pixels),
-optional support O(pixels*radius^2); serialization is subscriber-driven. Snapshot
-copies and debug payloads are material costs, so keep debug off for production.
-
-## Measured behavior (uHumans2 apartment, 2026-10-09)
-
-Full `tesse_cd_apartment` replay through `optical_flow_dynamics_test.launch.yaml`
-(GT poses, `play_rate:=0.5`, 1739 frames, about 348 five-frame windows), evaluated
-with `evaluate_dynamics_bag.py` at its default per-mode threshold (legacy CDF > 0.99,
-temporal evidence > 0.5). "Human" is the semantic proxy described above, not a motion
-annotation. Scored FPR counts background pixels with a usable score.
-
-| Run | Coverage | Human coverage | Precision | Recall all / interior | Scored background FPR: all / static edge / smooth | AP (scored) |
-| --- | --- | --- | --- | --- | --- | --- |
-| legacy | 11.4% | 3.4% | 6.0% | 3.2% / 1.2% | 9.6% / 11.5% / 8.0% | 0.070 |
-| temporal, `aperture_sigma: 0`, `ambiguity_check: false` | 58.9% | 28.1% | 2.3% | 24.2% / 29.6% | 38.4% / 9.9% / 42.1% | 0.023 |
-| temporal, aperture only | 57.8% | 27.4% | 2.6% | 22.7% / 27.8% | 32.1% / 9.4% / 34.8% | 0.027 |
-| temporal, defaults | 21.5% | 10.5% | 9.8% | 9.7% / 11.5% | 9.2% / 1.8% / 10.8% | 0.104 |
-| temporal, defaults, `regularized_evidence` | 24.1% | 11.8% | 10.2% | 10.8% / 12.3% | 8.7% / 1.8% / 10.6% | 0.111 |
-
-The legacy hard texture gate leaves 3.4% of human pixels scored and responds on
-static geometric edges. Without the ambiguity check, temporal mode scores far more of
-the scene but classifies flat, weakly textured static surfaces as moving (Farneback
-drift under camera rotation; median apparent speed 0.8-1.4 m/s against 0.4-0.5 m/s
-camera translation). With the defaults, static-edge false positives fall from 11.5%
-(legacy) to 1.8% of scored edge pixels, human recall triples and precision improves.
-Background within 3 px of humans remains the dominant false-positive region (60%
-scored FPR): occlusion and disocclusion by moving people change correspondences there.
-
-On a 200-frame human segment, `min_reliability: 0.5` reduced scored background FPR
-from 12% to 2.7% but human recall from 12.7% to 1.8%: the humans are themselves weakly
-textured. `photometric_tolerance` 6 or 10 lowered FPR only marginally while losing
-human coverage. Defaults keep the higher-recall setting; raise `min_reliability` for a
-conservative output.
-
-Estimator-only runtime on the same 720x480 frames (Release build, single thread):
-legacy 92 ms/frame, temporal 175 ms, plus spatial support 189 ms, plus debug output
-200 ms. Neither mode keeps up with 20 Hz input; the replay pipeline queued frames
-and drained them after playback rather than dropping them in these runs.
-
-After the border rule (untestable correspondences are ambiguous) and with the CRF,
-on the 200-frame human segment through the offline harness (regularized output
-counted as moving when > 0.5; background rows over scored pixels, human recall over
-all human pixels):
-
-| Spatial stage | Background scored | Background FPR scored / all | Human recall all / interior | ms/frame |
-| --- | --- | --- | --- | --- |
-| none (raw) | 17.3% | 2.0% / 0.34% | 11.3% / 13.1% | 192 |
-| `support` | 20.3% | 2.1% / 0.42% | 12.0% / 13.5% | 192 |
-| `crf`, `crf_pairwise_weight` 1.5 | 24.6% | 2.5% / 0.61% | 21.6% / 23.2% | 271 |
-| `crf`, 3 (default) | 35.1% | 3.4% / 1.19% | 37.7% / 39.1% | 271 |
-| `crf`, 5 | 45.3% | 4.4% / 1.99% | 50.7% / 51.7% | 271 |
-
-On the static segment, `crf` at 3 raised all-pixel background FPR from 0.29% to 1.08%.
-`crf_pairwise_weight` is the recall/false-positive knob. The CRF adds about 80 ms per
-frame (single thread); the full-sequence table above predates these changes.
-
-Adding the visibility test (defaults, same segments and counting):
-
-| Segment / output | Background FPR scored / all | Human recall all / interior |
-| --- | --- | --- |
-| humans, raw, without -> with visibility | 2.0% / 0.34% -> 1.4% / 0.25% | 11.3% / 13.1% -> 31.2% / 29.1% |
-| humans, `crf` 3, without -> with | 3.4% / 1.19% -> 2.3% / 0.79% | 37.7% / 39.1% -> 53.7% / 52.7% |
-| static, raw, without -> with | 1.5% / 0.29% -> 0.8% / 0.15% | n/a |
-| static, `crf` 3, without -> with | 2.7% / 1.08% -> 1.3% / 0.53% | n/a |
-
-False positives within 10 px of people fell from 21% to 1% of raw background false
-positives. The remainder lies mostly on smooth surfaces where depth says the static
-point is present but appearance changed (e.g. shading or shadows from people), and
-on static depth edges in the camera-motion segment. Visibility adds about 5 ms/frame.
-
-These numbers come from one synthetic sequence with exact poses and depth. They are
-not a calibration and do not transfer automatically to real sensors.
+Temporal sufficient statistics plus 2x2 pixel covariance use about 368 bytes/pixel
+(127 MB at 720x480), independent of window length. The frame history adds about
+37 bytes/pixel per retained frame (gray, depth, texture, structure tensor and two
+flow fields: 64 MB for five 720x480 frames), in addition to immutable snapshots
+retained by Khronos's bounded frame buffer. Legacy state is 240 bytes/pixel plus one
+frame. There are no per-track heap histories or dense temporal covariance matrices.
+Per-frame tracking is O(pixels*(window_size-1)), fitting O(pixels), optional support
+O(pixels*radius^2); serialization is subscriber-driven. Snapshot copies and debug
+payloads are material costs, so keep debug off for production.
 
 ## Scope and references
 
@@ -494,106 +523,48 @@ limitations. Human semantics are only a proxy for motion during rosbag evaluatio
 - [Multiframe Scene Flow](https://arxiv.org/abs/1710.02124)
 - [SF2SE3](https://arxiv.org/abs/2209.08532)
 
+## Code layout and extraction boundary
+
+| File | Responsibility |
+| --- | --- |
+| `motion_detection/optical_flow_dynamics.cpp` | Input validation, window lifecycle, flow tracking, evidence and snapshots |
+| `motion_detection/optical_flow_dynamics_config.cpp` | `config_utilities` field declarations and validation |
+| `motion_detection/optical_flow_spatial.cpp` | Reference-grid support and CRF passes |
+| `motion_detection/temporal_motion_model.{h,cpp}` | Eigen-only sufficient statistics and static/velocity fits |
+| `motion_detection/motion_uncertainty.{h,cpp}` | Eigen-only RGB-D Jacobian and legacy uncertainty propagation |
+| `motion_detection/dynamics_estimator.h` | Input/output interface and evidence definitions |
+| `khronos_ros/.../dynamics_visualization.{h,cpp}` | ROS messages and subscriber-driven publishing |
+
+The numerical models have no ROS or map dependencies. The estimator still depends
+on Hydra's `InputData`, camera calibration, timestamps and pose conventions; the
+spatial helpers currently use its configuration and estimate types. A separate
+repository can carry these detector files and tests together, then replace the
+Hydra input adapter and retain the `config_utilities` factory. Khronos integration
+remains in `ActiveWindow`/`FrameData`; it is not part of the numerical method.
+
+Tracking and spatial passes partition independent rows through OpenCV's existing
+worker pool. CRF updates remain synchronous: workers finish before buffers swap.
+No detector-specific thread parameter or global thread setting is introduced; Khronos
+does not set one either, so OpenCV uses all cores. Farneback itself is single-threaded,
+so the newest frame's two flow directions run as two concurrent tasks. Flow, texture
+and tensors are computed once per input and reused by every later reference while
+the frame is retained. Pixels without enough accepted samples update counts, span and
+reliability without solving unusable fits; debug mode still computes partial
+static-fit diagnostics. Static projection and texture samples are reused within each
+pixel. Aperture tensors are computed only when enabled. Spatial reference RGB/depth
+copies are retained only when spatial support is enabled. References with zero CRF
+unaries skip weight construction and iterations when the support threshold is
+positive: all marginals would remain 0.5 with no support. Snapshots still own
+independent copies of all output matrices, including reference geometry.
+
+See the [refactor](OPTICAL_FLOW_EVALUATION.md#implementation-refactor-benchmark-2026-10-12)
+and [sliding-window](OPTICAL_FLOW_EVALUATION.md#sliding-window-runtime-2026-10-12)
+benchmarks for measured runtime and output-equivalence checks.
+
 ## Build and checks
 
-### Offline evaluation of a recorded ROS 2 bag
-
-Run inside Docker, from the workspace directory containing `src/` and the mounted
-`datasets/` folder. The evaluator needs the recorded results **and** the original
-dataset bag containing the semantic GT topic:
-
-```bash
-python3 src/khronos/khronos_ros/scripts/evaluate_dynamics_bag.py \
-  --results-bag datasets/dynamics_eval \
-  --ground-truth-bag datasets/tesse_cd_apartment \
-  --dataset tesse_cd_apartment \
-  --output datasets/dynamics_eval_report
-```
-
-Replace the original bag path with your actual directory. Both bags must be ROS 2
-directories containing `metadata.yaml`. Source ROS and the workspace first. After
-building `khronos_ros`, the script is also available through
-`ros2 run khronos_ros evaluate_dynamics_bag.py` with the same arguments.
-
-Default topics are `/khronos_node/visualization/dynamics_cloud` in the results bag
-and `/tesse/seg_cam/converted/image_raw` in the original bag. Check the latter with
-`ros2 bag info`; use `--labels-topic` if its name differs. It must contain scalar
-label IDs, rather than RGB semantic colors. If the converted label topic was
-produced during replay rather than stored in the original bag, record it alongside
-the dynamics cloud and use that recording as `--ground-truth-bag`.
-
-The script applies the selected dataset's Hydra label remap and reads its
-`dynamic_labels`: apartment humans are mapped label 20; office humans are label 17.
-Use `--dataset tesse_cd_office` for office. If the GT image already contains mapped
-semantic IDs, add `--labels-are-remapped`. For custom label spaces, supply
-`--label-remap /path/to/remap.yaml --foreground-labels ID ...`. A binary mask with
-foreground 1 and background 0 needs `--labels-are-remapped --foreground-labels 1
---ignore-labels` (empty ignore list), so background 0 is included.
-
-The script makes two passes over the result clouds and retains the **last recorded
-snapshot per reference header timestamp**. It matches GT image header timestamps
-exactly by default, preserving reference-frame pixel indexing. A partial final
-window uses its last available snapshot. Match sensor timestamps rather than bag
-receipt times. `--timestamp-tolerance-ms` permits nearest matches when necessary;
-keep this small and inspect `gt_offset_ns` in the report. Unmatched windows are
-counted and skipped; no matches fail evaluation. Relevant GT masks are compressed
-into a temporary disk cache, removed after evaluation, to avoid retaining a long
-sequence in RAM. Neither input bag is modified.
-
-An eligible pixel has a finite first-frame XYZ and a valid mapped GT label. Unknown
-label 0 and unmapped IDs are excluded by default. Cloud points are world coordinates;
-their distance from the world origin is not used as a sensor range filter. A score
-is usable when finite and its observation count reaches `--min-observations`
-(default 2; match your estimator config).
-
-Reports are written to a new/empty directory:
-
-| File | Contents |
-| --- | --- |
-| `summary.json` | Matched/skipped windows, foreground/background coverage, failure rates, track survival and approximate scored-pixel AP |
-| `threshold_metrics.csv` | Exact precision, recall, F1, IoU and background FPR at mode-specific thresholds, for all regions |
-| `precision_recall.csv` | Histogram-based PR curve with scored-only and full recall; default 10,000 score bins |
-| `windows.csv` | Exact threshold metrics and interior/boundary recall per reference window, plus GT timestamp offsets |
-
-The evaluator auto-detects `scoring_mode` and selects `motion_evidence` for temporal
-mode or `probability` for legacy. Use `--score-field regularized_evidence` to evaluate
-spatial inference separately. Temporal thresholds default to 0.25, 0.5, 0.75;
-legacy defaults remain 0.95, 0.99, 0.999. Temporal scores have no nominal static
-exceedance rate; that CSV column is empty. Inferred pixels are eligible for spatial
-segmentation metrics but do not become direct observations or reliable tracks.
-
-`recall_all` includes unknown foreground pixels as missed detections;
-`recall_scored` evaluates only pixels with usable scores. Report both with coverage.
-Similarly, compare `background_fpr_scored` with `background_fpr_all`, since rejecting
-background pixels can lower the latter. For legacy noise calibration, compare scored
-background exceedance with `ideal_static_exceedance = 1 - threshold`; actual rates
-can differ because the assumed noise model and selection gates are approximate.
-
-Foreground interior is an erosion of the GT foreground mask by a configurable
-radius (default 3 pixels); the removed foreground band is its boundary. Background
-within the same dilation radius is reported separately from far background.
-`background_geometric_edge` / `background_geometric_smooth` split `background_far`
-by whether a reference pixel lies within the same radius of a static geometric
-discontinuity: a 4-neighbor world-point jump above `--geometric-edge-threshold`
-(default 0.1 m) or an invalid neighbor. Their scored FPRs isolate static-boundary
-false positives from human-adjacent ones.
-Foreground/background and interior/boundary failure fractions expose where
-tracking evidence is lost. Cumulative failure bits can overlap, so their fractions
-do not sum to one. Each reference window receives pixel-weighted aggregation;
-`windows.csv` permits separate per-window analysis.
-
-These labels evaluate semantic foreground as a **proxy for movement**. A stationary
-human still belongs to that foreground, and moving objects outside the chosen
-classes are labeled background. Use actual motion masks to establish true motion
-accuracy. AP/PR are quantized by `--score-bins`; fixed-threshold counts are exact.
-The script does not estimate detection latency or motion trajectories from these
-messages, whose header carries only the reference timestamp.
-
-Tests, including generated-bag integration, can be run with ROS sourced:
-
-```bash
-python3 -m unittest discover -s src/khronos/khronos_ros/tests -v
-```
+Recorded-bag evaluation instructions and historical accuracy measurements are in
+[OPTICAL_FLOW_EVALUATION.md](OPTICAL_FLOW_EVALUATION.md).
 
 ### Estimator build and checks
 
@@ -604,7 +575,7 @@ headers. All estimator options are declared and validated with `config_utilities
 With the normal Khronos dependencies installed:
 
 ```bash
-colcon build --packages-select khronos khronos_ros --cmake-args -DBUILD_TESTING=ON
+colcon build --packages-select khronos khronos_ros --cmake-args -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release
 colcon test --packages-select khronos --ctest-args -R optical_flow_dynamics
 ```
 
@@ -612,7 +583,14 @@ colcon test --packages-select khronos --ctest-args -R optical_flow_dynamics
 including legacy regressions, static camera motion, coherent velocity, a biased
 reference, retention of evidence after a missing final depth sample or track loss,
 depth jumps, poor fits, short/degenerate tracks, uncertainty scaling,
-continuous sloped surfaces, missing depth, reference indexing and spatial leakage. A stripe test checks
+continuous sloped surfaces, missing depth, reference indexing and spatial leakage.
+Additional regressions compare serial/parallel execution and debug/normal evidence
+through partial and completed windows, and check zero-evidence CRF behavior. Sliding
+tests check that each output uses the current frame's geometry and timestamp, that
+old frames expire by count and duration, and that gaps, duplicates and rewinds clear
+the history. A DIS test checks that both presets separate a moving surface from
+a static scene. A keyframe test checks that keyframe estimates equal every-frame
+detection and that other inputs return no estimate. A stripe test checks
 that the aperture problem does not become coherent motion (and that it does when
 `aperture_sigma: 0`); the structure tensor is checked against `cornerMinEigenVal`. Numerical
 tests check the unprojection Jacobian by finite differences, compare sequential

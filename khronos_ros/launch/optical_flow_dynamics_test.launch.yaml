@@ -2,12 +2,8 @@
 launch:
   - arg: {name: bag_path, description: Path to the uHumans2 ROS 2 bag directory}
   - arg: {name: dataset, default: tesse_cd_apartment}
-  - arg: {name: play_rate, default: '0.5'}
+  - arg: {name: play_rate, default: '0.25'}
   - arg: {name: paused, default: 'false'}
-  - arg: {name: scoring_mode, default: temporal}
-  - arg: {name: spatial_enabled, default: 'false'}
-  - arg: {name: spatial_method, default: crf}
-  - arg: {name: debug_output, default: 'false'}
   - arg: {name: rviz, default: 'true'}
   - arg: {name: output_dir, default: /tmp/khronos_optical_flow_dynamics_test}
   - arg: {name: mapper_config, default: $(find-pkg-share khronos_ros)/config/mapper/optical_flow_dynamics_test.yaml}
@@ -32,7 +28,7 @@ launch:
         - {name: sim_time_required, value: 'true'}
         - {name: start_visualizer, value: 'false'}
         # Override the generic launch's binary-motion/prior evaluation loggers.
-        - {name: extra_mapper_yaml, value: '{active_window: {khronos_sinks: [], dynamics_estimator: {scoring_mode: $(var scoring_mode), spatial_enabled: $(var spatial_enabled), spatial_method: $(var spatial_method), debug_output: $(var debug_output)}}}'}
+        - {name: extra_mapper_yaml, value: '{active_window: {khronos_sinks: []}}'}
 
   - node:
       if: $(var rviz)

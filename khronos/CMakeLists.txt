@@ -35,6 +35,8 @@ add_library(${PROJECT_NAME}
         src/active_window/integration/tracking_integrator.cpp
         src/active_window/motion_detection/free_space_motion_detector.cpp
         src/active_window/motion_detection/optical_flow_dynamics.cpp
+        src/active_window/motion_detection/optical_flow_dynamics_config.cpp
+        src/active_window/motion_detection/optical_flow_spatial.cpp
         src/active_window/motion_detection/motion_uncertainty.cpp
         src/active_window/motion_detection/temporal_motion_model.cpp
         src/active_window/object_detection/connected_semantics.cpp

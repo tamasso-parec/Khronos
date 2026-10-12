@@ -60,11 +60,13 @@ TemporalMotionFit TemporalMotionModel::fit() const {
   if (factor.info() != Eigen::Success || !factor.isPositive() ||
       factor.vectorD().minCoeff() <= 1.e-12 * factor.vectorD().maxCoeff()) return result;
   const Eigen::Matrix<double, 6, 1> parameters = factor.solve(rhs);
-  const Eigen::Matrix<double, 6, 6> covariance = factor.solve(Eigen::Matrix<double, 6, 6>::Identity());
+  // Only the velocity columns of the inverse normal matrix are needed.
+  const Eigen::Matrix<double, 6, 3> velocity_columns =
+      factor.solve(Eigen::Matrix<double, 6, 6>::Identity().rightCols<3>());
   result.velocity = parameters.tail<3>();
-  result.velocity_covariance = covariance.bottomRightCorner<3, 3>();
+  result.velocity_covariance = velocity_columns.bottomRows<3>();
   result.dynamic_cost = std::max(0.0, weighted_norm_ - rhs.dot(parameters));
-  result.valid = parameters.allFinite() && covariance.allFinite() &&
+  result.valid = parameters.allFinite() && velocity_columns.allFinite() &&
                  std::isfinite(result.static_cost) && std::isfinite(result.dynamic_cost);
   return result;
 }

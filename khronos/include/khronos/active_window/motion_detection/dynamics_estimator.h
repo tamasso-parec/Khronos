@@ -27,11 +27,12 @@ enum class DynamicsValidity : uint8_t {
   kUnavailable = 0, kInsufficient = 1, kUnreliable = 2, kStatic = 3, kDynamic = 4,
 };
 
-// All images are indexed by pixels of the reference frame, not the current frame.
+// All images use reference pixels. Temporal mode anchors on the current frame;
+// legacy mode anchors on the first frame of a non-overlapping window.
 struct DynamicsEstimate {
   using ConstPtr = std::shared_ptr<const DynamicsEstimate>;
 
-  hydra::TimeStamp reference_timestamp_ns = 0;
+  hydra::TimeStamp reference_timestamp_ns = 0;  // Current input timestamp in temporal mode.
   hydra::TimeStamp latest_timestamp_ns = 0;
   int num_frames = 0;
   bool legacy_mode = false;
@@ -47,7 +48,7 @@ struct DynamicsEstimate {
   cv::Mat residual_norm;      // CV_32FC1, last accepted raw 3D distance [m], NaN if absent.
   cv::Mat innovation_sigma;   // CV_32FC1, sqrt(trace(conditional covariance)/3) [m].
   cv::Mat motion_evidence;    // CV_32FC1, uncalibrated [0,1]; unavailable evidence is NaN.
-  cv::Mat regularized_evidence;  // CV_32FC1, optional one-pass spatial inference.
+  cv::Mat regularized_evidence;  // CV_32FC1, optional support or CRF inference.
   cv::Mat reliability;        // CV_32FC1, heuristic observation quality [0,1].
   cv::Mat validity;           // CV_8UC1, DynamicsValidity.
   cv::Mat spatial_support;    // CV_8UC1, 0 unavailable, 1 direct, 2 inferred.
@@ -64,7 +65,7 @@ struct DynamicsEstimate {
   cv::Mat measurement_sigma;    // CV_32FC1, sqrt(trace(world point covariance)/3) [m].
 };
 
-// Independent of binary motion clustering: estimates describe an earlier point cloud.
+// Independent of binary motion clustering; reference geometry is never fitted or extrapolated.
 class DynamicsEstimator {
  public:
   virtual ~DynamicsEstimator() = default;

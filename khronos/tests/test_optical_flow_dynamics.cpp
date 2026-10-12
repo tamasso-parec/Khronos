@@ -1,6 +1,7 @@
 #include "khronos/active_window/motion_detection/optical_flow_dynamics.h"
 
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 #include <config_utilities/parsing/yaml.h>
@@ -287,11 +288,29 @@ TEST_F(OpticalFlowDynamicsTest, ConfigurationValidationAndFactory) {
   bad = config;
   bad.min_observations = bad.window_size;
   EXPECT_FALSE(config::isValid(bad));
-  const auto parsed = config::fromYaml<config::VirtualConfig<DynamicsEstimator>>(
-      YAML::Load("{type: OpticalFlowDynamics, scoring_mode: legacy, window_size: 3, min_observations: 1}"));
+  bad = config;
+  bad.keyframe_interval = 3;  // The fixture's legacy scorer has no keyframes.
+  EXPECT_FALSE(config::isValid(bad));
+  bad.scoring_mode = "temporal";
+  EXPECT_TRUE(config::isValid(bad));
+  bad.keyframe_interval = 0;
+  EXPECT_FALSE(config::isValid(bad));
+  bad = config;
+  bad.flow_method = "dis";
+  EXPECT_FALSE(config::isValid(bad));
+  const auto parsed = config::fromYaml<config::VirtualConfig<DynamicsEstimator>>(YAML::Load(
+      "{type: OpticalFlowDynamics, scoring_mode: legacy, window_size: 3, min_observations: 1}"));
   const auto estimator = parsed.create();
   ASSERT_TRUE(estimator);
   EXPECT_EQ(estimator->processInput(frame(1000000000))->num_frames, 1);
+  const auto preset = config::fromYaml<config::VirtualConfig<DynamicsEstimator>>(
+      YAML::Load("{type: OpticalFlowDynamics, spatial_method: crf}"));
+  const auto temporal = preset.create();
+  ASSERT_TRUE(temporal);
+  const auto first = temporal->processInput(frame(1000000000));
+  EXPECT_FALSE(first->legacy_mode);
+  EXPECT_FALSE(first->debug_output);
+  EXPECT_EQ(first->accepted_count.at<int>(48, 64), 1);
 }
 
 TEST_F(OpticalFlowDynamicsTest, TemporalCoherentMotionAndReferenceGeometry) {
@@ -318,28 +337,212 @@ TEST_F(OpticalFlowDynamicsTest, TemporalCoherentMotionAndReferenceGeometry) {
   EXPECT_NEAR(result->latest_timestamp_ns, 1200000000u, 1);
 }
 
-TEST_F(OpticalFlowDynamicsTest, TemporalMissingFinalObservationKeepsEarlierEvidence) {
+void expectSameEvidence(const DynamicsEstimate& a, const DynamicsEstimate& b) {
+  EXPECT_EQ(a.reference_timestamp_ns, b.reference_timestamp_ns);
+  EXPECT_EQ(a.latest_timestamp_ns, b.latest_timestamp_ns);
+  EXPECT_EQ(a.num_frames, b.num_frames);
+  const std::pair<const char*, cv::Mat DynamicsEstimate::*> fields[] = {
+      {"reference_points", &DynamicsEstimate::reference_points},
+      {"probability", &DynamicsEstimate::probability},
+      {"squared_error", &DynamicsEstimate::squared_error},
+      {"observation_count", &DynamicsEstimate::observation_count},
+      {"failure_flags", &DynamicsEstimate::failure_flags},
+      {"failure_count", &DynamicsEstimate::failure_count},
+      {"track_alive", &DynamicsEstimate::track_alive},
+      {"forward_backward_error", &DynamicsEstimate::forward_backward_error},
+      {"residual_norm", &DynamicsEstimate::residual_norm},
+      {"innovation_sigma", &DynamicsEstimate::innovation_sigma},
+      {"motion_evidence", &DynamicsEstimate::motion_evidence},
+      {"regularized_evidence", &DynamicsEstimate::regularized_evidence},
+      {"reliability", &DynamicsEstimate::reliability},
+      {"validity", &DynamicsEstimate::validity},
+      {"spatial_support", &DynamicsEstimate::spatial_support},
+      {"accepted_count", &DynamicsEstimate::accepted_count},
+      {"temporal_span", &DynamicsEstimate::temporal_span},
+      {"velocity", &DynamicsEstimate::velocity},
+      {"free_space_count", &DynamicsEstimate::free_space_count},
+      {"visibility_tests", &DynamicsEstimate::visibility_tests},
+  };
+  for (const auto& [name, field] : fields) {
+    SCOPED_TRACE(name);
+    const auto& left = a.*field;
+    const auto& right = b.*field;
+    ASSERT_EQ(left.size(), right.size());
+    ASSERT_EQ(left.type(), right.type());
+    for (int row = 0; row < left.rows; ++row) {
+      EXPECT_EQ(std::memcmp(left.ptr(row), right.ptr(row), left.cols * left.elemSize()), 0);
+    }
+  }
+}
+
+TEST_F(OpticalFlowDynamicsTest, ParallelRowsPreserveSerialEvidence) {
+  struct RestoreThreads {
+    int count = cv::getNumThreads();
+    ~RestoreThreads() { cv::setNumThreads(count); }
+  } restore_threads;
+  for (const std::string mode : {"legacy", "temporal", "support", "crf"}) {
+    SCOPED_TRACE(mode);
+    config.scoring_mode = mode == "legacy" ? "legacy" : "temporal";
+    config.spatial_enabled = mode == "support" || mode == "crf";
+    config.spatial_method = mode == "crf" ? "crf" : "support";
+    OpticalFlowDynamics serial(config), parallel(config);
+    for (int i = 0; i < 7; ++i) {
+      auto input = frame(1000000000 + i * 50000000, i * 2.5f);
+      if (i == 3) {
+        input.depth_image(cv::Rect(60, 44, 9, 9)).setTo(std::numeric_limits<float>::quiet_NaN());
+      }
+      cv::setNumThreads(1);
+      const auto a = serial.processInput(input);
+      cv::setNumThreads(4);
+      const auto b = parallel.processInput(input);
+      expectSameEvidence(*a, *b);
+    }
+  }
+}
+
+TEST_F(OpticalFlowDynamicsTest, DebugFitsDoNotChangePartialOrCompletedEvidence) {
   config.scoring_mode = "temporal";
-  config.ambiguity_check = false;  // Border patches are untestable; this test isolates retention.
-  // A centre pixel loses depth; a pixel near the border leaves the image.
-  for (const int u : {64, 118}) {
+  config.spatial_enabled = true;
+  config.spatial_method = "crf";
+  auto debug_config = config;
+  debug_config.debug_output = true;
+  OpticalFlowDynamics normal(config), debug(debug_config);
+  DynamicsEstimate::ConstPtr first;
+  for (int i = 0; i < 7; ++i) {
+    const auto input = frame(1000000000 + i * 50000000, i * 2.5f);
+    const auto a = normal.processInput(input);
+    const auto b = debug.processInput(input);
+    expectSameEvidence(*a, *b);
+    EXPECT_TRUE(a->static_cost.empty());
+    EXPECT_FALSE(b->static_cost.empty());
+    if (i == 0) first = b;
+  }
+  normal.reset();
+  debug.reset();
+  EXPECT_EQ(first->num_frames, 1);
+  EXPECT_EQ(first->accepted_count.at<int>(48, 64), 1);
+  EXPECT_TRUE(std::isnan(first->motion_evidence.at<float>(48, 64)));
+  EXPECT_EQ(first->static_cost.at<float>(48, 64), 0.f);
+}
+
+TEST_F(OpticalFlowDynamicsTest, CrfWithoutEvidenceHonorsSupportThreshold) {
+  config.scoring_mode = "temporal";
+  config.spatial_enabled = true;
+  config.spatial_method = "crf";
+  OpticalFlowDynamics guarded(config);
+  const auto unknown = guarded.processInput(frame(1000000000));
+  EXPECT_TRUE(std::isnan(unknown->regularized_evidence.at<float>(48, 64)));
+  EXPECT_EQ(unknown->spatial_support.at<uint8_t>(48, 64), 0);
+  config.crf_min_support = 0.0;
+  OpticalFlowDynamics unguarded(config);
+  const auto undecided = unguarded.processInput(frame(1000000000));
+  EXPECT_EQ(undecided->regularized_evidence.at<float>(48, 64), 0.5f);
+  EXPECT_EQ(undecided->spatial_support.at<uint8_t>(48, 64), 2);
+}
+
+TEST_F(OpticalFlowDynamicsTest, MissingOldestObservationKeepsCurrentWindowEvidence) {
+  config.scoring_mode = "temporal";
+  config.ambiguity_check = false;
+  for (const int u : {64, 9}) {
     OpticalFlowDynamics estimator(config);
     DynamicsEstimate::ConstPtr result;
-    for (int i = 0; i < 4; ++i) {
-      result = estimator.processInput(frame(1000000000 + i * 50000000, i * 2.5f));
+    for (int i = 0; i < 5; ++i) {
+      auto input = frame(1000000000 + i * 50000000, i * 2.5f);
+      // Current pixel 64 backtracks to pixel 54 in the oldest image.
+      if (i == 0) input.depth_image(cv::Rect(50, 44, 9, 9)).setTo(std::numeric_limits<float>::quiet_NaN());
+      result = estimator.processInput(input);
     }
-    const float before = result->motion_evidence.at<float>(48, u);
-    ASSERT_GT(before, 0.5);
-    auto last = frame(1200000000, 10.f);
-    last.depth_image(cv::Rect(70, 44, 9, 9)).setTo(std::numeric_limits<float>::quiet_NaN());
-    result = estimator.processInput(last);
-    // Missing evidence neither erases nor replaces the fit of accepted observations.
     EXPECT_EQ(result->accepted_count.at<int>(48, u), 4);
-    EXPECT_EQ(result->motion_evidence.at<float>(48, u), before);
+    EXPECT_GT(result->motion_evidence.at<float>(48, u), 0.5);
     EXPECT_EQ(result->validity.at<uint8_t>(48, u), static_cast<uint8_t>(DynamicsValidity::kDynamic));
     EXPECT_EQ(result->failure_count.at<int>(48, u), 1);
     EXPECT_EQ(result->track_alive.at<uint8_t>(48, u), u == 64 ? 255 : 0);
     EXPECT_TRUE(result->failure_flags.at<uint16_t>(48, u) & (u == 64 ? kInvalidDepth : kOutsideImage));
+  }
+}
+
+TEST_F(OpticalFlowDynamicsTest, SlidingWindowUsesCurrentGeometryAndEvictsOldFrames) {
+  config.scoring_mode = "temporal";
+  config.visibility_check = false;  // Isolate measured axial velocity and geometry.
+  OpticalFlowDynamics estimator(config);
+  DynamicsEstimate::ConstPtr first;
+  for (int i = 0; i < 9; ++i) {
+    const auto input = frame(1000000000 + i * 50000000, 0, 0, 2.f + 0.025f * i);
+    const auto result = estimator.processInput(input);
+    if (!i) first = result;
+    EXPECT_EQ(result->reference_timestamp_ns, input.timestamp_ns);
+    EXPECT_EQ(result->latest_timestamp_ns, input.timestamp_ns);
+    EXPECT_EQ(result->num_frames, std::min(i + 1, config.window_size));
+    EXPECT_EQ(result->accepted_count.at<int>(48, 64), std::min(i + 1, config.window_size));
+    EXPECT_EQ(result->reference_points.at<cv::Vec3f>(48, 64), input.vertex_map.at<cv::Vec3f>(48, 64));
+    if (i >= 3) EXPECT_NEAR(result->velocity.at<cv::Vec3f>(48, 64)[2], 0.5, 0.01);
+  }
+  EXPECT_EQ(first->reference_timestamp_ns, 1000000000u);
+  EXPECT_FLOAT_EQ(first->reference_points.at<cv::Vec3f>(48, 64)[2], 2.f);
+  EXPECT_EQ(first->accepted_count.at<int>(48, 64), 1);
+}
+
+TEST_F(OpticalFlowDynamicsTest, SlidingDurationGapAndOwnedHistory) {
+  config.scoring_mode = "temporal";
+  config.max_window_duration = 0.11;
+  OpticalFlowDynamics estimator(config);
+  for (int i = 0; i < 8; ++i) {
+    auto input = frame(1000000000 + i * 50000000);
+    const auto result = estimator.processInput(input);
+    EXPECT_EQ(result->num_frames, std::min(3, i + 1));
+    EXPECT_EQ(result->accepted_count.at<int>(48, 64), std::min(3, i + 1));
+    // Reusing caller buffers must not corrupt retained measurements or flow images.
+    input.depth_image.setTo(std::numeric_limits<float>::quiet_NaN());
+    input.color_image.setTo(0);
+    input.vertex_map.setTo(0);
+  }
+  EXPECT_EQ(estimator.processInput(frame(2000000000))->num_frames, 1);
+  EXPECT_EQ(estimator.processInput(frame(2050000000))->num_frames, 2);
+  EXPECT_EQ(estimator.processInput(frame(2050000000))->num_frames, 1);
+  EXPECT_EQ(estimator.processInput(frame(1000000000))->num_frames, 1);
+}
+
+TEST_F(OpticalFlowDynamicsTest, KeyframesMatchEveryFrameDetectionAndSkipBetween) {
+  config.scoring_mode = "temporal";
+  config.spatial_enabled = true;
+  config.spatial_method = "crf";
+  auto keyframe_config = config;
+  keyframe_config.keyframe_interval = 3;
+  OpticalFlowDynamics every_frame(config), keyframes(keyframe_config);
+  for (int i = 0; i < 10; ++i) {
+    SCOPED_TRACE(i);
+    const auto input = frame(1000000000 + i * 50000000, i * 2.5f);
+    const auto expected = every_frame.processInput(input);
+    const auto result = keyframes.processInput(input);
+    if ((i + 1) % 3) {
+      EXPECT_FALSE(result);
+      continue;
+    }
+    // Detection on a keyframe uses the same retained flow history as every-frame detection.
+    ASSERT_TRUE(result);
+    expectSameEvidence(*expected, *result);
+  }
+  // A gap clears the history and restarts the cadence.
+  EXPECT_FALSE(keyframes.processInput(frame(2000000000)));
+  EXPECT_FALSE(keyframes.processInput(frame(2050000000)));
+  const auto restarted = keyframes.processInput(frame(2100000000));
+  ASSERT_TRUE(restarted);
+  EXPECT_EQ(restarted->num_frames, 3);
+}
+
+TEST_F(OpticalFlowDynamicsTest, DisFlowSeparatesMotionFromStaticScene) {
+  config.scoring_mode = "temporal";
+  for (const std::string method : {"dis_fast", "dis_medium"}) {
+    SCOPED_TRACE(method);
+    config.flow_method = method;
+    OpticalFlowDynamics moving(config), still(config);
+    DynamicsEstimate::ConstPtr a, b;
+    for (int i = 0; i < 5; ++i) {
+      a = moving.processInput(frame(1000000000 + i * 50000000, i * 2.5f));
+      b = still.processInput(frame(1000000000 + i * 50000000));
+    }
+    EXPECT_EQ(a->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kDynamic));
+    EXPECT_EQ(b->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kStatic));
   }
 }
 
@@ -351,7 +554,7 @@ TEST_F(OpticalFlowDynamicsTest, TemporalJumpAndPoorFitsRemainUnknown) {
     OpticalFlowDynamics estimator(config);
     DynamicsEstimate::ConstPtr result;
     for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, depths[i]));
-    // The final nearer depth hides the static point: that observation is missing evidence.
+    // The current-reference history cannot be explained by either motion model.
     EXPECT_GE(result->accepted_count.at<int>(48, 64), 4);
     EXPECT_TRUE(std::isnan(result->motion_evidence.at<float>(48, 64)));
     EXPECT_EQ(result->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kUnreliable));
@@ -389,7 +592,9 @@ TEST_F(OpticalFlowDynamicsTest, TemporalDepthLayersMissingSamplesAndTimestampRes
   auto missing = frame(1050000000);
   missing.depth_image(cv::Rect(60, 44, 9, 9)).setTo(std::numeric_limits<float>::quiet_NaN());
   auto result = estimator.processInput(missing);
-  EXPECT_EQ(result->track_alive.at<uint8_t>(48, 64), 255);
+  // Missing current depth cannot borrow an older point as current geometry.
+  EXPECT_EQ(result->track_alive.at<uint8_t>(48, 64), 0);
+  EXPECT_EQ(result->accepted_count.at<int>(48, 64), 0);
   for (int i = 2; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000));
   EXPECT_EQ(result->accepted_count.at<int>(48, 64), 4);
   EXPECT_EQ(result->motion_evidence.at<float>(48, 64), 0.f);
@@ -401,6 +606,7 @@ TEST_F(OpticalFlowDynamicsTest, TemporalDepthLayersMissingSamplesAndTimestampRes
 
 TEST_F(OpticalFlowDynamicsTest, TemporalUncertaintyAndContinuousTexturedSurface) {
   config.scoring_mode = "temporal";
+  config.visibility_check = false;  // Isolate covariance from directional visibility.
   auto high_config = config;
   high_config.position_sigma_floor = 0.2;
   OpticalFlowDynamics low(config), high(high_config);
@@ -478,10 +684,10 @@ TEST_F(OpticalFlowDynamicsTest, UntestableBorderCorrespondencesAreAmbiguous) {
   OpticalFlowDynamics estimator(config);
   DynamicsEstimate::ConstPtr result;
   for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, i * 2.5f));
-  // Near the border the 5x5 patch leaves the image, so the flow cannot be verified.
-  EXPECT_TRUE(result->failure_flags.at<uint16_t>(48, 120) & kAmbiguousCorrespondence);
-  EXPECT_LT(result->accepted_count.at<int>(48, 120), config.min_fit_observations);
-  EXPECT_NE(result->validity.at<uint8_t>(48, 120), static_cast<uint8_t>(DynamicsValidity::kDynamic));
+  // The current pixel's 5x5 patch leaves the image, so its backward flow cannot be verified.
+  EXPECT_TRUE(result->failure_flags.at<uint16_t>(48, 125) & kAmbiguousCorrespondence);
+  EXPECT_LT(result->accepted_count.at<int>(48, 125), config.min_fit_observations);
+  EXPECT_NE(result->validity.at<uint8_t>(48, 125), static_cast<uint8_t>(DynamicsValidity::kDynamic));
   // Away from the border the same motion stays verifiable.
   EXPECT_FALSE(result->failure_flags.at<uint16_t>(48, 64) & kAmbiguousCorrespondence);
 }
@@ -489,12 +695,12 @@ TEST_F(OpticalFlowDynamicsTest, UntestableBorderCorrespondencesAreAmbiguous) {
 TEST_F(OpticalFlowDynamicsTest, VisibilitySkipsOcclusionAndDetectsFreeSpace) {
   config.scoring_mode = "temporal";
   {
-    // A nearer occluder covers a static point: no motion evidence, only an occlusion flag.
+    // A current point was hidden by a nearer historical occluder.
     OpticalFlowDynamics estimator(config);
     DynamicsEstimate::ConstPtr result;
     for (int i = 0; i < 5; ++i) {
       auto input = frame(1000000000 + i * 50000000);
-      if (i >= 2) input.depth_image(cv::Rect(54, 38, 21, 21)).setTo(1.f);
+      if (i < 3) input.depth_image(cv::Rect(54, 38, 21, 21)).setTo(1.f);
       result = estimator.processInput(input);
     }
     EXPECT_TRUE(result->failure_flags.at<uint16_t>(48, 64) & kOccluded);
@@ -502,11 +708,11 @@ TEST_F(OpticalFlowDynamicsTest, VisibilitySkipsOcclusionAndDetectsFreeSpace) {
     EXPECT_NE(result->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kDynamic));
   }
   {
-    // A receding surface: the static point would have to be seen through (free space).
+    // An approaching surface occupies space that was empty in the past.
     color.setTo(cv::Scalar::all(100));
     OpticalFlowDynamics estimator(config);
     DynamicsEstimate::ConstPtr result;
-    for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, 2.f + 0.3f * i));
+    for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, 3.2f - 0.3f * i));
     EXPECT_EQ(result->visibility_tests.at<int>(48, 64), 4);
     EXPECT_EQ(result->free_space_count.at<int>(48, 64), 4);
     EXPECT_EQ(result->validity.at<uint8_t>(48, 64), static_cast<uint8_t>(DynamicsValidity::kDynamic));
@@ -517,7 +723,7 @@ TEST_F(OpticalFlowDynamicsTest, VisibilitySkipsOcclusionAndDetectsFreeSpace) {
     config.visibility_check = false;
     OpticalFlowDynamics estimator(config);
     DynamicsEstimate::ConstPtr result;
-    for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, 2.f + 0.3f * i));
+    for (int i = 0; i < 5; ++i) result = estimator.processInput(frame(1000000000 + i * 50000000, 0, 0, 3.2f - 0.3f * i));
     EXPECT_EQ(result->visibility_tests.at<int>(48, 64), 0);
   }
 }
