@@ -414,11 +414,10 @@ void OpticalFlowDynamics::startWindow(const hydra::InputData& input, const Frame
   }
   tracked_pixels_.create(gray.size(), CV_32FC2);
   uncertainties_.clear();
-  temporal_models_.clear();
-  pixel_covariances_.clear();
   if (estimate_.legacy_mode) {
     uncertainties_.resize(gray.total());
   } else {
+    // Models are cleared per pixel below; covariances are only read for accepted references.
     temporal_models_.resize(gray.total());
     pixel_covariances_.resize(gray.total());
     if (config.spatial_enabled) {
@@ -450,6 +449,7 @@ void OpticalFlowDynamics::startWindow(const hydra::InputData& input, const Frame
       for (int u = 0; u < gray.cols; ++u) {
         const cv::Vec2f pixel(u, v);
         tracked_pixels_.at<cv::Vec2f>(v, u) = pixel;
+        if (!estimate_.legacy_mode) temporal_models_[v * gray.cols + u].clear();
         auto& flags = estimate_.failure_flags.at<uint16_t>(v, u);
         const auto raw = input.vertex_map.at<cv::Vec3f>(v, u);
         Eigen::Vector3d point(raw[0], raw[1], raw[2]);
@@ -822,9 +822,12 @@ void OpticalFlowDynamics::regularizeSpatial() {
   applyCrfSupport(estimate_, crf_unary_, crf_weights_, config);
 }
 
-DynamicsEstimate::ConstPtr OpticalFlowDynamics::snapshot() const {
+DynamicsEstimate::ConstPtr OpticalFlowDynamics::snapshot() {
+  // Temporal mode allocates every output again at the next keyframe, so the snapshot can own
+  // the current buffers.
+  if (!estimate_.legacy_mode) return std::make_shared<const DynamicsEstimate>(std::move(estimate_));
   auto result = std::make_shared<DynamicsEstimate>(estimate_);
-  // Frame buffers and sinks may retain snapshots while the next input is processed.
+  // Legacy mode updates its window in place; frame buffers and sinks may retain snapshots.
   result->reference_points = estimate_.reference_points.clone();
   result->probability = estimate_.probability.clone();
   result->squared_error = estimate_.squared_error.clone();

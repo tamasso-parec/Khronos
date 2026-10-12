@@ -25,8 +25,10 @@ class TemporalMotionModel {
            double time_seconds,
            double reliability);
   TemporalMotionFit fit() const;
+  // Forgets all observations in O(1); the next add() resets the accumulators.
+  void clear() { count_ = 0; }
   int observations() const { return count_; }
-  double span() const { return last_time_ - first_time_; }
+  double span() const { return count_ ? last_time_ - first_time_ : 0.0; }
   double reliability() const { return count_ ? reliability_sum_ / count_ : 0.0; }
 
  private:

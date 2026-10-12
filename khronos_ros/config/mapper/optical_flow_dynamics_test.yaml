@@ -43,8 +43,11 @@ active_window:
     # See OPTICAL_FLOW_DYNAMICS.md; add overrides here for calibration or ablations.
     spatial_enabled: true
     spatial_method: crf
-    # Flow for every input, motion detection on every third (about 100 ms/frame vs 184).
+    # Flow for every input, motion detection on every third input.
     keyframe_interval: 3
+    # DIS FAST: 7 ms per flow pair vs 48 ms for Farneback, with fewer false positives on the
+    # harness segments (OPTICAL_FLOW_EVALUATION.md, flow method comparison). Not yet retuned.
+    flow_method: dis_fast
 
   # Omitted optional motion_detector, object_detector, tracker and object_extractor
   # disable binary detections and object tracking for this test.

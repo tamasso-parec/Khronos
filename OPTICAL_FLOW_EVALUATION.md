@@ -215,8 +215,31 @@ highest recall, but its all-pixel FPR is above Farneback's. The estimator time f
 less than the flow time because more surviving tracks mean more tracking and fitting
 work; with keyframes (K=3) the flow share dominates and DIS FAST halves the per-frame
 cost. These are two short synthetic segments with exact depth and poses, scored by
-the semantic proxy, and DIS has not been tuned; they motivate a full replay, not a
-default change.
+the semantic proxy, and DIS has not been tuned; they motivate a full replay. The C++
+default stays Farneback; the test mapper uses DIS FAST.
+
+## Keyframe cost optimizations (2026-10-12)
+
+Exact changes to the keyframe work: symmetric CRF weights computed once per pair with
+precomputed depth links, per-pixel fit state cleared with a counter, and temporal
+snapshots taking ownership of their buffers instead of copying them. Profiled on the
+segment with people with the test preset (DIS FAST, K=3, CRF), same harness and threads:
+
+| Keyframe stage, ms | Before | After |
+| --- | --- | --- |
+| Reference setup | 19.3 | 12.5 |
+| Backward tracking (4 passes) | 52.1 | 52.7 |
+| Fits | 7.2 | 7.2 |
+| CRF weights | 29.4 | 12.3 |
+| CRF iterations and output | 10.9 | 11.5 |
+| Snapshot | 3.7 | 0.0 |
+
+Each input also costs about 13 ms for flow, gray/texture and structure tensor. The mean
+per input fell from about 57 ms to 46 ms, and a keyframe from about 135 ms to 109 ms.
+64-bit FNV-1a hashes of all 28 output matrices for every estimate were identical before and
+after on that segment for the preset (200 inputs), and for Farneback with CRF, DIS with
+one-pass support, and legacy scoring (60 inputs each), all with debug output enabled.
+Tracking is now the largest keyframe cost.
 
 ## Measured behavior (uHumans2 apartment, 2026-10-09)
 

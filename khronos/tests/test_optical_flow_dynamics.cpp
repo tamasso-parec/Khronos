@@ -475,7 +475,9 @@ TEST_F(OpticalFlowDynamicsTest, SlidingWindowUsesCurrentGeometryAndEvictsOldFram
     EXPECT_EQ(result->num_frames, std::min(i + 1, config.window_size));
     EXPECT_EQ(result->accepted_count.at<int>(48, 64), std::min(i + 1, config.window_size));
     EXPECT_EQ(result->reference_points.at<cv::Vec3f>(48, 64), input.vertex_map.at<cv::Vec3f>(48, 64));
-    if (i >= 3) EXPECT_NEAR(result->velocity.at<cv::Vec3f>(48, 64)[2], 0.5, 0.01);
+    if (i >= 3) {
+      EXPECT_NEAR(result->velocity.at<cv::Vec3f>(48, 64)[2], 0.5, 0.01);
+    }
   }
   EXPECT_EQ(first->reference_timestamp_ns, 1000000000u);
   EXPECT_FLOAT_EQ(first->reference_points.at<cv::Vec3f>(48, 64)[2], 2.f);

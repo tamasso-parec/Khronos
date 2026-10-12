@@ -19,6 +19,7 @@ bool TemporalMotionModel::add(const Eigen::Vector3d& point, const Eigen::Matrix3
   const Eigen::Matrix3d weight = factor.solve(Eigen::Matrix3d::Identity());
   if (!weight.allFinite()) return false;
   if (!count_) {
+    *this = TemporalMotionModel();
     origin_ = point;
     first_time_ = time;
   }
@@ -39,8 +40,8 @@ bool TemporalMotionModel::add(const Eigen::Vector3d& point, const Eigen::Matrix3
 TemporalMotionFit TemporalMotionModel::fit() const {
   TemporalMotionFit result;
   result.observations = count_;
-  result.span = last_time_ - first_time_;
   if (!count_) return result;
+  result.span = last_time_ - first_time_;
   result.reliability = reliability_sum_ / count_;
   const Eigen::LLT<Eigen::Matrix3d> static_factor(precision_);
   if (static_factor.info() != Eigen::Success) return result;

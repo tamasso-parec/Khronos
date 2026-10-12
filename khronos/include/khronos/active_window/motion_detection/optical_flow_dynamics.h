@@ -130,7 +130,7 @@ class OpticalFlowDynamics : public DynamicsEstimator {
   void scoreTemporal(int v, int u);
   void regularizeSpatial();
   void applyFreeSpace();
-  DynamicsEstimate::ConstPtr snapshot() const;
+  DynamicsEstimate::ConstPtr snapshot();
 
   DynamicsEstimate estimate_;
   std::deque<Frame> history_;

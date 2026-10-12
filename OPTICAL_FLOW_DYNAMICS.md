@@ -18,8 +18,8 @@ ros2 launch khronos_ros optical_flow_dynamics_test.launch.yaml \
   bag_path:=/data/tesse_cd_apartment
 ```
 
-This uses temporal scoring with CRF spatial support, detecting motion on every third
-frame (`keyframe_interval: 3`). Use `rviz:=false` for headless operation or
+This uses temporal scoring with CRF spatial support and DIS FAST flow, detecting
+motion on every third frame (`keyframe_interval: 3`, `flow_method: dis_fast`). Use `rviz:=false` for headless operation or
 `dataset:=tesse_cd_office` for the office bag. Playback defaults to `play_rate:=0.25`;
 this changes playback speed, not sensor timestamps. Faster playback than the pipeline
 can process builds a backlog: Hydra's queues block instead of dropping frames, and
@@ -450,7 +450,7 @@ noise parameters instead.
 | `spatial_color_sigma` / `spatial_velocity_tolerance` | 30 / 1 | RGB8 Euclidean difference / m/s |
 | `debug_output` | false | add fit/velocity diagnostics and debug matrices |
 | `min_observations` | 2 | legacy accepted comparisons after the reference |
-| `flow_method` | farneback | `farneback`, `dis_fast` or `dis_medium` |
+| `flow_method` | farneback | `farneback`, `dis_fast` or `dis_medium` (test preset: `dis_fast`) |
 | `flow_levels` / `flow_window_size` / `flow_iterations` | 3 / 15 / 3 | Farneback parameters; the window also sizes the aperture tensor |
 
 ## Outputs and compatibility
@@ -508,8 +508,8 @@ flow fields: 64 MB for five 720x480 frames), in addition to immutable snapshots
 retained by Khronos's bounded frame buffer. Legacy state is 240 bytes/pixel plus one
 frame. There are no per-track heap histories or dense temporal covariance matrices.
 Per-frame tracking is O(pixels*(window_size-1)), fitting O(pixels), optional support
-O(pixels*radius^2); serialization is subscriber-driven. Snapshot copies and debug
-payloads are material costs, so keep debug off for production.
+O(pixels*radius^2); serialization is subscriber-driven. Debug payloads (and legacy
+snapshot copies) are material costs, so keep debug off for production.
 
 ## Scope and references
 
@@ -554,8 +554,13 @@ static-fit diagnostics. Static projection and texture samples are reused within 
 pixel. Aperture tensors are computed only when enabled. Spatial reference RGB/depth
 copies are retained only when spatial support is enabled. References with zero CRF
 unaries skip weight construction and iterations when the support threshold is
-positive: all marginals would remain 0.5 with no support. Snapshots still own
-independent copies of all output matrices, including reference geometry.
+positive: all marginals would remain 0.5 with no support. CRF weights are symmetric,
+so each pair is computed once and mirrored, and a stencil segment's depth continuity
+is read from per-pixel unit-step link maps instead of being re-tested per pair.
+Per-pixel fit state is cleared with a counter rather than reallocated. A temporal
+snapshot takes ownership of the output images, which the next keyframe allocates
+again; legacy snapshots copy them because legacy windows update in place. Either way
+a snapshot is never modified after it is returned.
 
 See the [refactor](OPTICAL_FLOW_EVALUATION.md#implementation-refactor-benchmark-2026-10-12)
 and [sliding-window](OPTICAL_FLOW_EVALUATION.md#sliding-window-runtime-2026-10-12)

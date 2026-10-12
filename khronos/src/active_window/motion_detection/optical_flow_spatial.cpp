@@ -57,35 +57,52 @@ std::vector<float> crfWeights(const cv::Mat& reference_color,
     spatial_exponents[k] = -(stencil[k].x * stencil[k].x + stencil[k].y * stencil[k].y) /
                            (2.0 * config.crf_spatial_sigma * config.crf_spatial_sigma);
   }
+  const auto valid = [](float z) { return std::isfinite(z) && z > 0.f; };
+  // Even stencil indices step along (1,0), (0,1), (1,1), (1,-1); each odd index is the opposite
+  // of the preceding even one. links[j] marks a pixel whose unit step along direction j stays on
+  // the same depth layer, so a segment is connected iff all its unit steps are.
+  std::array<cv::Mat, 4> links;
+  for (int j = 0; j < 4; ++j) {
+    const cv::Point step = stencil[2 * j];
+    links[j] = cv::Mat::zeros(rows, cols, CV_8UC1);
+    cv::parallel_for_(cv::Range(0, rows), [&](const cv::Range& range) {
+      for (int v = range.start; v < range.end; ++v) {
+        for (int u = 0; u < cols; ++u) {
+          const int x = u + step.x, y = v + step.y;
+          if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
+          const float a = reference_depth.at<float>(y, x), b = reference_depth.at<float>(v, u);
+          links[j].at<uint8_t>(v, u) =
+              valid(a) && valid(b) &&
+              std::abs(a - b) <= config.max_depth_jump + config.depth_jump_relative * std::min(a, b);
+        }
+      }
+    });
+  }
+  // Weights are symmetric, so each pair is computed once from its even-index end. Every slot has a
+  // single writer, so rows can write into neighboring rows' slots in parallel.
   cv::parallel_for_(cv::Range(0, rows), [&](const cv::Range& range) {
     for (int v = range.start; v < range.end; ++v) {
       for (int u = 0; u < cols; ++u) {
-        const float depth = reference_depth.at<float>(v, u);
-        if (!std::isfinite(depth) || depth <= 0.f) continue;
+        if (!valid(reference_depth.at<float>(v, u))) continue;
         const auto color = reference_color.at<cv::Vec3b>(v, u);
-        float* w = &weights[(static_cast<size_t>(v) * cols + u) * kCrfStencilSize];
-        for (int k = 0; k < kCrfStencilSize; ++k) {
+        for (int k = 0; k < kCrfStencilSize; k += 2) {
           const int x = u + stencil[k].x, y = v + stencil[k].y;
           if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
-          // Every pixel on the connecting segment must continue the same depth layer.
           const int steps = std::max(std::abs(stencil[k].x), std::abs(stencil[k].y));
+          const cv::Point step = stencil[k] / steps;
+          const cv::Mat& link = links[(k % 8) / 2];
           bool connected = true;
-          for (int i = 1; i <= steps && connected; ++i) {
-            const int px = u + stencil[k].x * i / steps, py = v + stencil[k].y * i / steps;
-            const int qx = u + stencil[k].x * (i - 1) / steps,
-                      qy = v + stencil[k].y * (i - 1) / steps;
-            const float a = reference_depth.at<float>(py, px),
-                        b = reference_depth.at<float>(qy, qx);
-            connected = std::isfinite(a) && a > 0.f &&
-                        std::abs(a - b) <=
-                            config.max_depth_jump + config.depth_jump_relative * std::min(a, b);
+          for (int i = 0; i < steps && connected; ++i) {
+            connected = link.at<uint8_t>(v + step.y * i, u + step.x * i);
           }
           if (!connected) continue;
           const cv::Vec3d difference =
               cv::Vec3d(color) - cv::Vec3d(reference_color.at<cv::Vec3b>(y, x));
-          w[k] = std::exp(spatial_exponents[k] -
-                          difference.dot(difference) /
-                              (2.0 * config.spatial_color_sigma * config.spatial_color_sigma));
+          const float weight = std::exp(spatial_exponents[k] -
+                                        difference.dot(difference) /
+                                            (2.0 * config.spatial_color_sigma * config.spatial_color_sigma));
+          weights[(static_cast<size_t>(v) * cols + u) * kCrfStencilSize + k] = weight;
+          weights[(static_cast<size_t>(y) * cols + x) * kCrfStencilSize + (k ^ 1)] = weight;
         }
       }
     }
