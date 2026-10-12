@@ -503,8 +503,8 @@ allocated only in debug mode. Velocity itself is retained for local support.
 
 Temporal sufficient statistics plus 2x2 pixel covariance use about 368 bytes/pixel
 (127 MB at 720x480), independent of window length. The frame history adds about
-37 bytes/pixel per retained frame (gray, depth, texture, structure tensor and two
-flow fields: 64 MB for five 720x480 frames), in addition to immutable snapshots
+38 bytes/pixel per retained frame (gray, depth, depth-layer state, texture, structure tensor and two
+flow fields: 66 MB for five 720x480 frames), in addition to immutable snapshots
 retained by Khronos's bounded frame buffer. Legacy state is 240 bytes/pixel plus one
 frame. There are no per-track heap histories or dense temporal covariance matrices.
 Per-frame tracking is O(pixels*(window_size-1)), fitting O(pixels), optional support
@@ -557,6 +557,13 @@ unaries skip weight construction and iterations when the support threshold is
 positive: all marginals would remain 0.5 with no support. CRF weights are symmetric,
 so each pair is computed once and mirrored, and a stencil segment's depth continuity
 is read from per-pixel unit-step link maps instead of being re-tested per pair.
+Each frame stores a one-byte depth-layer state per pixel (valid depth, layer break to
+the right and below neighbor), so the temporal depth-footprint test scans bytes in the
+original order instead of re-evaluating depth tolerances for every observation. The
+ambiguity check reads the 5x5 reference patch once from integer pixels and compares
+both candidate locations against it. 2x2 and 3x3 covariances are inverted with
+`choleskyInverse`, which repeats the arithmetic of Eigen 3.4's `LLT::solve(Identity)`
+without its blocked-kernel overhead; a test pins it to Eigen bit for bit.
 Per-pixel fit state is cleared with a counter rather than reallocated. A temporal
 snapshot takes ownership of the output images, which the next keyframe allocates
 again; legacy snapshots copy them because legacy windows update in place. Either way

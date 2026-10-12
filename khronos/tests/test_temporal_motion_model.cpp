@@ -1,5 +1,6 @@
 #include "khronos/active_window/motion_detection/temporal_motion_model.h"
 
+#include <cstring>
 #include <random>
 
 #include <Eigen/LU>
@@ -85,6 +86,30 @@ TEST(TemporalMotionModel, LongerTemporalBaselineStrengthensEvidence) {
   }
   EXPECT_GT(long_track.fit().static_cost - long_track.fit().dynamic_cost,
             20 * (short_track.fit().static_cost - short_track.fit().dynamic_cost));
+}
+
+template <int N>
+void expectCholeskyInverseMatchesEigen() {
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<double> value(-1.0, 1.0);
+  for (int trial = 0; trial < 1000; ++trial) {
+    Eigen::Matrix<double, N, N> a;
+    for (int i = 0; i < N * N; ++i) a.data()[i] = value(rng);
+    const Eigen::Matrix<double, N, N> spd =
+        a * a.transpose() + 1.e-3 * Eigen::Matrix<double, N, N>::Identity();
+    const Eigen::LLT<Eigen::Matrix<double, N, N>> factor(spd);
+    ASSERT_EQ(factor.info(), Eigen::Success);
+    const Eigen::Matrix<double, N, N> expected =
+        factor.solve(Eigen::Matrix<double, N, N>::Identity());
+    const Eigen::Matrix<double, N, N> actual = choleskyInverse(factor);
+    // Bit-identical, not just close: the detector's outputs are regression-checked byte for byte.
+    ASSERT_EQ(std::memcmp(expected.data(), actual.data(), sizeof(expected)), 0) << spd;
+  }
+}
+
+TEST(TemporalMotionModel, CholeskyInverseMatchesEigenBitForBit) {
+  expectCholeskyInverseMatchesEigen<2>();
+  expectCholeskyInverseMatchesEigen<3>();
 }
 
 }  // namespace khronos

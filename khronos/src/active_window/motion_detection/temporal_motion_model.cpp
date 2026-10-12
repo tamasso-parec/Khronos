@@ -16,7 +16,7 @@ bool TemporalMotionModel::add(const Eigen::Vector3d& point, const Eigen::Matrix3
   }
   const Eigen::LLT<Eigen::Matrix3d> factor(covariance);
   if (factor.info() != Eigen::Success) return false;
-  const Eigen::Matrix3d weight = factor.solve(Eigen::Matrix3d::Identity());
+  const Eigen::Matrix3d weight = choleskyInverse(factor);
   if (!weight.allFinite()) return false;
   if (!count_) {
     *this = TemporalMotionModel();

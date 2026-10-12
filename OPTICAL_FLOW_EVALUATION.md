@@ -241,6 +241,29 @@ after on that segment for the preset (200 inputs), and for Farneback with CRF, D
 one-pass support, and legacy scoring (60 inputs each), all with debug output enabled.
 Tracking is now the largest keyframe cost.
 
+### Tracking optimizations
+
+A callgrind profile of 12 inputs attributed about 27% of all instructions to the
+depth-layer neighborhood test in `samplePoint`, about 15% to Eigen's blocked
+triangular-solve kernel running 2x2 and 3x3 covariance inversions, and 4% to the
+ambiguity patch comparison. Three exact changes followed: a per-frame depth-layer state
+map scanned in the original order, `choleskyInverse` for the small inversions, and a
+shared integer-sampled reference patch. Solving the inversions column by column with
+vector right-hand sides was faster too, but changed the last bits of a few velocities
+and costs, so it was not used. Same segment, preset and threads:
+
+| Keyframe stage, ms | Before | After |
+| --- | --- | --- |
+| Reference setup | 12.5 | 10.5 |
+| Backward tracking (4 passes) | 52.7 | 29.6 |
+| Fits | 7.2 | 7.0 |
+| CRF weights + iterations | 23.8 | 22.3 |
+
+A keyframe now costs about 83 ms including its own flow and texture, and the mean per
+input fell from about 46 ms to 37 ms (36-39 ms over repeated runs). Output hashes of all
+28 matrices were again identical for the preset, Farneback with CRF, DIS with support
+and legacy scoring.
+
 ## Measured behavior (uHumans2 apartment, 2026-10-09)
 
 Full `tesse_cd_apartment` replay through `optical_flow_dynamics_test.launch.yaml`

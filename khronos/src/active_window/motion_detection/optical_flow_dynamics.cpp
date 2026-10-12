@@ -1,6 +1,7 @@
 #include "khronos/active_window/motion_detection/optical_flow_dynamics.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -37,13 +38,42 @@ T interpolate(const cv::Mat& image, const cv::Vec2f& p) {
          (image.at<T>(y + 1, x) * (1.f - dx) + image.at<T>(y + 1, x + 1) * dx) * dy;
 }
 
+// Per-pixel depth-layer state, computed once per frame for the temporal neighborhood test.
+enum DepthState : uint8_t { kValidDepth = 1, kRightBreak = 2, kDownBreak = 4 };
+
+// A break marks a valid neighbor on another layer: |z - n| > max_depth_jump + relative*min(z, n).
+cv::Mat depthLayerState(const cv::Mat& depth, const OpticalFlowDynamics::Config& config) {
+  cv::Mat state = cv::Mat::zeros(depth.size(), CV_8UC1);
+  const auto valid = [](double z) { return std::isfinite(z) && z > 0.0; };
+  cv::parallel_for_(cv::Range(0, depth.rows), [&](const cv::Range& rows) {
+    for (int v = rows.start; v < rows.end; ++v) {
+      for (int u = 0; u < depth.cols; ++u) {
+        const double z = depth.at<float>(v, u);
+        if (!valid(z)) continue;
+        uint8_t s = kValidDepth;
+        const auto breaks = [&](double neighbor) {
+          return valid(neighbor) &&
+                 std::abs(z - neighbor) >
+                     config.max_depth_jump + config.depth_jump_relative * std::min(z, neighbor);
+        };
+        if (u + 1 < depth.cols && breaks(depth.at<float>(v, u + 1))) s |= kRightBreak;
+        if (v + 1 < depth.rows && breaks(depth.at<float>(v + 1, u))) s |= kDownBreak;
+        state.at<uint8_t>(v, u) = s;
+      }
+    }
+  });
+  return state;
+}
+
 struct PointSample {
   Eigen::Vector3d point;
   Eigen::Matrix3d jacobian;
   double depth_variance = 0.0;
 };
 
+// depth_state (temporal mode only) enables the depth-layer neighborhood test.
 uint16_t samplePoint(const cv::Mat& depth_image,
+                     const cv::Mat& depth_state,
                      float min_range,
                      float max_range,
                      const hydra::Camera::Config& camera,
@@ -76,21 +106,24 @@ uint16_t samplePoint(const cv::Mat& depth_image,
       sample.depth_variance += weight * weight * sigma * sigma;
     }
   }
-  if (config.scoring_mode == "temporal") {
+  if (!depth_state.empty()) {
+    // Scan order decides between invalid depth and a layer break: right neighbor, then down.
     const int radius = std::max(config.depth_neighborhood_radius, std::min(footprint_radius, 3));
     const int y0 = std::max(0, y - radius), y1 = std::min(depth_image.rows - 1, y + radius + 1);
     const int x0 = std::max(0, x - radius), x1 = std::min(depth_image.cols - 1, x + radius + 1);
     for (int iy = y0; iy <= y1; ++iy) {
+      const uint8_t* row = depth_state.ptr<uint8_t>(iy);
+      const uint8_t* below = iy < y1 ? depth_state.ptr<uint8_t>(iy + 1) : nullptr;
       for (int ix = x0; ix <= x1; ++ix) {
-        const double z = depth_image.at<float>(iy, ix);
-        if (!std::isfinite(z) || z <= 0.0) return kInvalidDepth;
-        for (const auto& offset : {cv::Point(1, 0), cv::Point(0, 1)}) {
-          if (ix + offset.x > x1 || iy + offset.y > y1) continue;
-          const double neighbor = depth_image.at<float>(iy + offset.y, ix + offset.x);
-          if (!std::isfinite(neighbor) || neighbor <= 0.0) return kInvalidDepth;
-          const double tolerance =
-              config.max_depth_jump + config.depth_jump_relative * std::min(z, neighbor);
-          if (std::abs(z - neighbor) > tolerance) return kDepthDiscontinuity;
+        const uint8_t s = row[ix];
+        if (!(s & kValidDepth)) return kInvalidDepth;
+        if (ix < x1) {
+          if (!(row[ix + 1] & kValidDepth)) return kInvalidDepth;
+          if (s & kRightBreak) return kDepthDiscontinuity;
+        }
+        if (below) {
+          if (!(below[ix] & kValidDepth)) return kInvalidDepth;
+          if (s & kDownBreak) return kDepthDiscontinuity;
         }
       }
     }
@@ -112,30 +145,37 @@ uint16_t samplePoint(const cv::Mat& depth_image,
   return 0;
 }
 
-// Mean absolute gray difference between 5x5 patches; NaN if either patch leaves the image.
-double patchDifference(const cv::Mat& reference,
-                       const cv::Vec2f& p_reference,
-                       const cv::Mat& current,
-                       const cv::Vec2f& p_current) {
+// 5x5 gray patch around an integer reference pixel, row-major; false if it leaves the image.
+using Patch = std::array<float, 25>;
+bool referencePatch(const cv::Mat& image, int u, int v, Patch& patch) {
+  if (u < 2 || v < 2 || u + 2 >= image.cols - 1 || v + 2 >= image.rows - 1) return false;
+  int i = 0;
+  for (int dy = -2; dy <= 2; ++dy) {
+    for (int dx = -2; dx <= 2; ++dx) patch[i++] = image.at<uint8_t>(v + dy, u + dx);
+  }
+  return true;
+}
+
+// Mean absolute gray difference to a reference patch, sampling the current image bilinearly
+// around p; NaN if that patch leaves the image.
+double patchDifference(const Patch& reference, const cv::Mat& current, const cv::Vec2f& p) {
   const cv::Vec2f margin(2.f, 2.f);
-  if (!inside(reference, p_reference - margin) || !inside(reference, p_reference + margin) ||
-      !inside(current, p_current - margin) || !inside(current, p_current + margin)) {
+  if (!inside(current, p - margin) || !inside(current, p + margin)) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  const auto sample = [](const cv::Mat& image, float x, float y) {
+  const auto sample = [&](float x, float y) {
     const int x0 = static_cast<int>(x), y0 = static_cast<int>(y);
     const float dx = x - x0, dy = y - y0;
-    return (image.at<uint8_t>(y0, x0) * (1.f - dx) + image.at<uint8_t>(y0, x0 + 1) * dx) *
+    return (current.at<uint8_t>(y0, x0) * (1.f - dx) + current.at<uint8_t>(y0, x0 + 1) * dx) *
                (1.f - dy) +
-           (image.at<uint8_t>(y0 + 1, x0) * (1.f - dx) + image.at<uint8_t>(y0 + 1, x0 + 1) * dx) *
+           (current.at<uint8_t>(y0 + 1, x0) * (1.f - dx) +
+            current.at<uint8_t>(y0 + 1, x0 + 1) * dx) *
                dy;
   };
   double sum = 0.0;
+  int i = 0;
   for (int dy = -2; dy <= 2; ++dy) {
-    for (int dx = -2; dx <= 2; ++dx) {
-      sum += std::abs(sample(reference, p_reference[0] + dx, p_reference[1] + dy) -
-                      sample(current, p_current[0] + dx, p_current[1] + dy));
-    }
+    for (int dx = -2; dx <= 2; ++dx) sum += std::abs(reference[i++] - sample(p[0] + dx, p[1] + dy));
   }
   return sum / 25.0;
 }
@@ -341,6 +381,7 @@ OpticalFlowDynamics::Frame OpticalFlowDynamics::prepareFrame(const hydra::InputD
   frame.depth = input.depth_image.clone();  // Callers may reuse their input buffers.
   cv::cvtColor(input.color_image, frame.gray, cv::COLOR_RGB2GRAY);
   cv::cornerMinEigenVal(frame.gray, frame.texture, 3);
+  if (config.scoring_mode == "temporal") frame.depth_state = depthLayerState(frame.depth, config);
   if (config.scoring_mode == "temporal" && config.aperture_sigma > 0.0 &&
       config.min_texture > 0.0) {
     frame.tensor = structureTensor(frame.gray, config.flow_window_size);
@@ -466,8 +507,14 @@ void OpticalFlowDynamics::startWindow(const hydra::InputData& input, const Frame
         }
         estimate_.reference_points.at<cv::Vec3f>(v, u) = cv::Vec3f(point.x(), point.y(), point.z());
         PointSample sample;
-        flags = samplePoint(
-            frame.depth, frame.min_range, frame.max_range, camera_config_, pixel, config, sample);
+        flags = samplePoint(frame.depth,
+                            frame.depth_state,
+                            frame.min_range,
+                            frame.max_range,
+                            camera_config_,
+                            pixel,
+                            config,
+                            sample);
         if (texture.at<float>(v, u) < config.min_texture) {
           flags |= kLowTexture;
         }
@@ -587,6 +634,7 @@ void OpticalFlowDynamics::track(const Frame& target,
                   : 3;
         }
         const uint16_t depth_failure = samplePoint(target.depth,
+                                                   target.depth_state,
                                                    target.min_range,
                                                    target.max_range,
                                                    camera_config_,
@@ -624,7 +672,7 @@ void OpticalFlowDynamics::track(const Frame& target,
             const Eigen::LLT<Eigen::Matrix2d> factor(information);
             if (factor.info() == Eigen::Success) {
               covariance += config.aperture_sigma * config.aperture_sigma * config.min_texture *
-                            factor.solve(Eigen::Matrix2d::Identity());
+                            choleskyInverse(factor);
             }
           }
         }
@@ -649,12 +697,15 @@ void OpticalFlowDynamics::track(const Frame& target,
           bool ambiguous = static_point.z() <= 0.0;
           if (!ambiguous) {
             if (!(cv::norm(predicted - next) <= config.ambiguity_min_separation)) {
-              const cv::Vec2f origin(u, v);
-              const double flow_difference = patchDifference(reference_gray_, origin, gray, next);
-              const double static_difference =
-                  patchDifference(reference_gray_, origin, gray, predicted);
-              ambiguous = !std::isfinite(flow_difference) || !std::isfinite(static_difference) ||
-                          static_difference <= flow_difference + config.photometric_tolerance;
+              Patch patch;
+              ambiguous = !referencePatch(reference_gray_, u, v, patch);
+              if (!ambiguous) {
+                const double flow_difference = patchDifference(patch, gray, next);
+                const double static_difference = patchDifference(patch, gray, predicted);
+                ambiguous = !std::isfinite(flow_difference) ||
+                            !std::isfinite(static_difference) ||
+                            static_difference <= flow_difference + config.photometric_tolerance;
+              }
             }
           }
           if (ambiguous) {

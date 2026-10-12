@@ -117,6 +117,7 @@ class OpticalFlowDynamics : public DynamicsEstimator {
     Eigen::Isometry3d world_T_sensor;
     float min_range, max_range;
     cv::Mat gray, depth, texture, tensor;
+    cv::Mat depth_state;  // Temporal: validity and depth-layer breaks to the right/down neighbor.
     // This frame -> previous frame, and the reverse cycle-check field.
     cv::Mat to_previous, from_previous;
   };
