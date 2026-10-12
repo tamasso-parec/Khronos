@@ -20,8 +20,8 @@ ros2 launch khronos_ros optical_flow_dynamics_test.launch.yaml \
 
 This uses temporal scoring with CRF spatial support and DIS FAST flow, detecting
 motion on every third frame (`keyframe_interval: 3`, `flow_method: dis_fast`). Use `rviz:=false` for headless operation or
-`dataset:=tesse_cd_office` for the office bag. Playback defaults to `play_rate:=0.25`;
-this changes playback speed, not sensor timestamps. Faster playback than the pipeline
+`dataset:=tesse_cd_office` for the office bag. Playback defaults to real time
+(`play_rate:=1.0`); this changes playback speed, not sensor timestamps. Faster playback than the pipeline
 can process builds a backlog: Hydra's queues block instead of dropping frames, and
 the output falls further behind the bag. The `active_window/all` row of
 `timing_stats.csv` in the output directory shows the mean per-frame cost; keep it

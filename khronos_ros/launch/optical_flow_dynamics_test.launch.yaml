@@ -2,7 +2,7 @@
 launch:
   - arg: {name: bag_path, description: Path to the uHumans2 ROS 2 bag directory}
   - arg: {name: dataset, default: tesse_cd_apartment}
-  - arg: {name: play_rate, default: '0.25'}
+  - arg: {name: play_rate, default: '1.0'}
   - arg: {name: paused, default: 'false'}
   - arg: {name: rviz, default: 'true'}
   - arg: {name: output_dir, default: /tmp/khronos_optical_flow_dynamics_test}

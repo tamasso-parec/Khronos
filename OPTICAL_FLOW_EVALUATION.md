@@ -180,8 +180,11 @@ block rather than drop, so unprocessed frames accumulated upstream and the proce
 input fell about 0.3 s of sensor time further behind per second. After about 130 s
 the backlog exceeded the 30 s TF buffer: every pose lookup then failed after five
 0.1 s retries, and the input never recovered. The test mapper now keeps 300 s of TF,
-detects on every third frame and the test launch defaults to `play_rate:=0.25`
-(200 ms per frame); check `active_window/all` in `timing_stats.csv` after a replay. Full-bag
+detects on every third frame with DIS FAST flow. After the keyframe and tracking
+optimizations below, a full `tesse_cd_apartment` replay at `play_rate:=1.0` averaged
+55 ms per frame for the active window (detector 33 ms, max 111 ms) over 1454 processed
+frames, with no failed pose lookups, so the test launch now defaults to real time. Check
+`active_window/all` in `timing_stats.csv` after a replay. Full-bag
 accuracy has not been re-measured with the sliding window; the tables below were
 recorded with non-overlapping windows.
 
