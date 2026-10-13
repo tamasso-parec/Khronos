@@ -55,6 +55,23 @@ output directory shows the mean cost per frame; keep it below `0.05 s / play_rat
 mapper keeps 300 s of TF: with the default 30 s, a backlog older than the TF buffer makes
 every pose lookup fail and the input never recovers.
 
+### Pose noise
+
+`pose_noise_level:=N` (1-5) replaces the ground-truth body pose with the seeded random-walk
+drift of the `dynamic_psg` pose-noise sweep, at the same levels (`docs/evaluation.md` in
+`dynamic_psg`), to show its effect live:
+
+```bash
+ros2 launch khronos_ros optical_flow_dynamics_test.launch.yaml \
+  bag_path:=/data/tesse_cd_apartment pose_noise_level:=4
+```
+
+`dynamic_psg_ros`'s `pose_drift_tf.py` republishes `world -> base_link_gt` as
+`world -> base_link_gt_noisy` with the drift and copies the camera extrinsic to
+`base_link_gt_noisy -> left_cam_noisy`; Khronos then uses the noisy frames. Level 0 (default)
+keeps the exact ground-truth path; `pose_noise_seed:=K` changes the drift realization.
+Drifting poses also blur Khronos's background map, which still integrates them.
+
 To change detector settings, copy the test mapper and edit its `dynamics_estimator`
 section:
 

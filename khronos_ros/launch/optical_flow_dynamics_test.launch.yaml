@@ -8,6 +8,13 @@ launch:
   - arg: {name: output_dir, default: /tmp/khronos_optical_flow_dynamics_test}
   - arg: {name: mapper_config, default: $(find-pkg-share khronos_ros)/config/mapper/optical_flow_dynamics_test.yaml}
   - arg: {name: rviz_path, default: $(find-pkg-share khronos_ros)/config/rviz/optical_flow_dynamics_test.rviz}
+  # Robustness demo: levels 1-5 replace the ground-truth body pose with the seeded random-walk
+  # drift of dynamic_psg's pose-noise sweep (same levels); 0 keeps exact ground truth.
+  - arg: {name: pose_noise_level, default: '0'}
+  - arg: {name: pose_noise_seed, default: '0'}
+  - let: {name: noisy_poses, value: $(eval '$(var pose_noise_level) > 0')}
+  - let: {name: pose_robot_frame, value: $(eval "'base_link_gt_noisy' if $(var pose_noise_level) > 0 else 'base_link_gt'")}
+  - let: {name: pose_sensor_frame, value: $(eval "'left_cam_noisy' if $(var pose_noise_level) > 0 else 'left_cam'")}
 
   # Reuse RGB-D playback, camera calibration and ground-truth TF wiring.
   - include:
@@ -20,6 +27,8 @@ launch:
         - {name: output_dir, value: $(var output_dir)}
         - {name: mapper_config, value: $(var mapper_config)}
         - {name: use_gt_frame, value: 'true'}
+        - {name: robot_frame, value: $(var pose_robot_frame)}
+        - {name: sensor_frame, value: $(var pose_sensor_frame)}
         # The existing ClosedSetImageReceiver still synchronizes GT label images.
         - {name: use_gt_semantics, value: 'true'}
         - {name: use_openset_semantics, value: 'false'}
@@ -29,6 +38,16 @@ launch:
         - {name: start_visualizer, value: 'false'}
         # Override the generic launch's binary-motion/prior evaluation loggers.
         - {name: extra_mapper_yaml, value: '{active_window: {khronos_sinks: []}}'}
+
+  - node:
+      if: $(var noisy_poses)
+      pkg: dynamic_psg_ros
+      exec: pose_drift_tf.py
+      name: pose_drift_tf
+      param:
+        - {name: level, value: $(var pose_noise_level)}
+        - {name: seed, value: $(var pose_noise_seed)}
+        - {name: use_sim_time, value: true}
 
   - node:
       if: $(var rviz)
