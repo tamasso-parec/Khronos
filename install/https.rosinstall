@@ -3,6 +3,10 @@
     uri: https://github.com/MIT-SPARK/config_utilities.git
     version: main
 - git:
+    local-name: dynamic_psg
+    uri: https://github.com/utn-mi/dynamic_psg.git
+    version: main
+- git:
     local-name: hydra
     uri: https://github.com/MIT-SPARK/Hydra.git
     version: main

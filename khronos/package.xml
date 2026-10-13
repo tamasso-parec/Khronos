@@ -22,6 +22,7 @@
   <depend>spark_dsg</depend>
   <depend>kimera_pgmo</depend>
   <depend>hydra</depend>
+  <depend>dynamic_psg</depend>
   <depend>libopencv-dev</depend>
   <build_depend>boost</build_depend>
   <test_depend>gtest</test_depend>

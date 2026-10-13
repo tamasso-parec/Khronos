@@ -46,7 +46,7 @@
 
 #include "khronos_ros/utils/ros_conversions.h"
 #include "khronos_ros/visualization/visualization_utils.h"
-#include "khronos_ros/visualization/dynamics_visualization.h"
+#include <dynamic_psg_ros/conversions.h>
 
 namespace khronos {
 namespace {
@@ -324,7 +324,7 @@ void ActiveWindowVisualizer::visualizeDynamicsProbability(const FrameData& data)
     publish(dynamics_reliability_pub_, "32FC1", result.reliability);
     publish(dynamics_validity_pub_, "mono8", result.validity);
     if (dynamics_evidence_pub_->get_subscription_count() > 0) {
-      publish(dynamics_evidence_pub_, "rgb8", dynamicsEvidenceImage(result));
+      publish(dynamics_evidence_pub_, "rgb8", dynamic_psg::dynamicsEvidenceImage(result));
     }
   }
   if (dynamics_failure_flags_pub_->get_subscription_count() > 0) {
@@ -336,25 +336,7 @@ void ActiveWindowVisualizer::visualizeDynamicsProbability(const FrameData& data)
     dynamics_track_alive_pub_->publish(*image.toImageMsg());
   }
   if (dynamics_failures_pub_->get_subscription_count() > 0) {
-    cv::Mat colors(result.failure_flags.size(), CV_8UC3, cv::Scalar(0, 0, 0));
-    for (int v = 0; v < colors.rows; ++v) {
-      for (int u = 0; u < colors.cols; ++u) {
-        const auto flags = result.failure_flags.at<uint16_t>(v, u);
-        auto& color = colors.at<cv::Vec3b>(v, u);
-        if (flags & kInvalidReference) {
-          color = cv::Vec3b(128, 128, 128);
-        } else if (flags & (kFlowInconsistent | kOutsideImage | kNonFiniteFlow | kNumericalFailure)) {
-          color = cv::Vec3b(255, 0, 255);
-        } else if (flags & kPoorModelFit) {
-          color = cv::Vec3b(255, 128, 0);
-        } else if (flags & (kLowTexture | kAmbiguousCorrespondence)) {
-          color = cv::Vec3b(255, 255, 0);
-        } else if (flags & (kInvalidDepth | kDepthDiscontinuity | kOutOfRange | kOccluded)) {
-          color = cv::Vec3b(0, 255, 255);
-        }
-      }
-    }
-    cv_bridge::CvImage image(header, "rgb8", colors);
+    cv_bridge::CvImage image(header, "rgb8", dynamic_psg::dynamicsFailureImage(result));
     dynamics_failures_pub_->publish(*image.toImageMsg());
   }
   if (dynamics_cloud_pub_->get_subscription_count() == 0) {
@@ -362,7 +344,7 @@ void ActiveWindowVisualizer::visualizeDynamicsProbability(const FrameData& data)
   }
 
   header.frame_id = config.global_frame_name;
-  dynamics_cloud_pub_->publish(dynamicsCloud(result, header));
+  dynamics_cloud_pub_->publish(dynamic_psg::dynamicsCloud(result, header));
 }
 
 void ActiveWindowVisualizer::visualizeTrackingImage(const Tracks& tracks,

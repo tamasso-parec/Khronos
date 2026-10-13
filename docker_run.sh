@@ -13,6 +13,13 @@ IMAGE="${KHRONOS_IMAGE:-khronos:jazzy}"
 mkdir -p "$BAG_DIR"
 xhost +local:docker >/dev/null 2>&1 || echo "warning: xhost failed, GUI windows may not open"
 
+# Mount a sibling dynamic_psg checkout over the image's copy, so its changes rebuild too.
+DYNAMIC_PSG_ARGS=()
+DYNAMIC_PSG_DIR="$(realpath -m "$REPO_DIR/../dynamic_psg")"
+if [ -d "$DYNAMIC_PSG_DIR" ]; then
+  DYNAMIC_PSG_ARGS=(-v "$DYNAMIC_PSG_DIR":/root/ros2_ws/src/dynamic_psg)
+fi
+
 GPU_ARGS=()
 if command -v nvidia-ctk >/dev/null 2>&1; then GPU_ARGS=(--gpus all); fi
 
@@ -23,4 +30,5 @@ docker run -it --rm --net=host \
   "${GPU_ARGS[@]}" \
   -v "$BAG_DIR":/data \
   -v "$REPO_DIR":/root/ros2_ws/src/khronos \
+  "${DYNAMIC_PSG_ARGS[@]}" \
   "$IMAGE"

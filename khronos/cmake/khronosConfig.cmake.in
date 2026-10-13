@@ -11,6 +11,7 @@ find_dependency(spark_dsg REQUIRED)
 find_dependency(kimera_pgmo REQUIRED)
 find_dependency(spatial_hash REQUIRED)
 find_dependency(hydra REQUIRED)
+find_dependency(dynamic_psg REQUIRED)
 
 if(NOT TARGET khronos::khronos)
   include("${khronos_CMAKE_DIR}/khronosTargets.cmake")
