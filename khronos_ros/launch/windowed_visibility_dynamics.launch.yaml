@@ -1,0 +1,29 @@
+---
+# uHumans2 replay with dynamic_psg's windowed-visibility estimator (loaded as a plugin) and an
+# RViz layout for its decisions, conflict counts and test counts. Same pipeline, data wiring
+# and pose-noise options as optical_flow_dynamics_test.launch.yaml.
+launch:
+  - arg: {name: bag_path, description: Path to the uHumans2 ROS 2 bag directory}
+  - arg: {name: dataset, default: tesse_cd_apartment}
+  - arg: {name: play_rate, default: '1.0'}
+  - arg: {name: paused, default: 'false'}
+  - arg: {name: rviz, default: 'true'}
+  - arg: {name: output_dir, default: /tmp/khronos_windowed_visibility_dynamics}
+  - arg: {name: mapper_config, default: $(find-pkg-share khronos_ros)/config/mapper/windowed_visibility_dynamics.yaml}
+  - arg: {name: rviz_path, default: $(find-pkg-share khronos_ros)/config/rviz/windowed_visibility_dynamics.rviz}
+  - arg: {name: pose_noise_level, default: '0'}
+  - arg: {name: pose_noise_seed, default: '0'}
+
+  - include:
+      file: $(find-pkg-share khronos_ros)/launch/optical_flow_dynamics_test.launch.yaml
+      arg:
+        - {name: bag_path, value: $(var bag_path)}
+        - {name: dataset, value: $(var dataset)}
+        - {name: play_rate, value: $(var play_rate)}
+        - {name: paused, value: $(var paused)}
+        - {name: rviz, value: $(var rviz)}
+        - {name: output_dir, value: $(var output_dir)}
+        - {name: mapper_config, value: $(var mapper_config)}
+        - {name: rviz_path, value: $(var rviz_path)}
+        - {name: pose_noise_level, value: $(var pose_noise_level)}
+        - {name: pose_noise_seed, value: $(var pose_noise_seed)}
