@@ -15,8 +15,10 @@ effect on Khronos's binary `dynamic_image` mask.
 ## Setup
 
 `dynamic_psg` is listed in `install/*.rosinstall`, so `vcs import` places it next to Khronos.
-`docker_run.sh` mounts a sibling `../dynamic_psg` checkout into the container when present, so
-changes to it rebuild like Khronos itself.
+The repository is private: build the Docker image with `docker build --ssh default -t
+khronos:jazzy .`, which clones it with your SSH agent's key. `docker_run.sh` mounts a sibling
+`../dynamic_psg` checkout into the container when present, so changes to it rebuild like
+Khronos itself.
 
 ## Integration
 
