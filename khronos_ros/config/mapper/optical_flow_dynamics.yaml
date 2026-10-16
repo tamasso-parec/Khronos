@@ -1,8 +1,0 @@
-# Merge into the mapper configuration. Input poses must come from ground truth;
-# on the uHumans2 launch, use use_gt_frame:=true.
-active_window:
-  dynamics_estimator:
-    type: OpticalFlowDynamics
-    # Other settings use validated OpticalFlowDynamics::Config defaults.
-    # See OPTICAL_FLOW_DYNAMICS.md; add overrides here for calibration or ablations.
-    spatial_method: crf  # Used only when spatial_enabled: true is added.
