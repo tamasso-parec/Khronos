@@ -35,6 +35,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * -------------------------------------------------------------------------- */
 
+#include <config_utilities/config.h>
+#include <config_utilities/external_registry.h>
 #include <config_utilities/parsing/context.h>
 #include <glog/logging.h>
 #include <ianvs/node_init.h>
@@ -42,6 +44,22 @@
 #include "khronos_ros/experiments/experiment_manager.h"
 #include "khronos_ros/khronos_pipeline.h"
 #include "khronos_ros/utils/ros_namespaces.h"
+
+namespace khronos {
+
+struct NodeSettings {
+  // Plugin libraries (names resolved on LD_LIBRARY_PATH, or paths) loaded before the pipeline,
+  // so their config_utilities registrations can be selected by `type` in the mapper config.
+  std::vector<std::string> external_library_paths;
+};
+
+void declare_config(NodeSettings& config) {
+  using namespace config;
+  name("NodeSettings");
+  field(config.external_library_paths, "external_library_paths");
+}
+
+}  // namespace khronos
 
 int main(int argc, char** argv) {
   config::initContext(argc, argv, true);
@@ -61,14 +79,20 @@ int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
 
-  // Setup node.
-  auto khronos = std::make_shared<khronos::KhronosPipeline>(nh);
-  // Don't add experiment namespace to avoid double namespacing
-  const auto experiment_config =
-      config::fromContext<khronos::ExperimentManager::Config>(khronos::RosNs::EXPERIMENT);
-  khronos::ExperimentManager manager(experiment_config, nh, khronos);
+  // Load plugins first; the guard unloads them after the pipeline is destroyed.
+  const auto settings = config::fromContext<khronos::NodeSettings>();
+  const auto plugins = config::loadExternalFactories(settings.external_library_paths);
 
-  // Run the experiment.
-  manager.run();
+  {
+    // Setup node.
+    auto khronos = std::make_shared<khronos::KhronosPipeline>(nh);
+    // Don't add experiment namespace to avoid double namespacing
+    const auto experiment_config =
+        config::fromContext<khronos::ExperimentManager::Config>(khronos::RosNs::EXPERIMENT);
+    khronos::ExperimentManager manager(experiment_config, nh, khronos);
+
+    // Run the experiment.
+    manager.run();
+  }
   return 0;
 }
