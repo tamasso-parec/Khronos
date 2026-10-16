@@ -20,7 +20,6 @@ find_package(Boost REQUIRED)
 find_package(spark_dsg REQUIRED)
 find_package(kimera_pgmo REQUIRED)
 find_package(hydra REQUIRED)
-find_package(dynamic_psg REQUIRED)
 
 include(GNUInstallDirs)
 
@@ -35,7 +34,6 @@ add_library(${PROJECT_NAME}
         src/active_window/integration/object_integrator.cpp
         src/active_window/integration/tracking_integrator.cpp
         src/active_window/motion_detection/free_space_motion_detector.cpp
-        src/active_window/motion_detection/optical_flow_dynamics.cpp
         src/active_window/object_detection/connected_semantics.cpp
         src/active_window/object_detection/instance_forwarding.cpp
         src/active_window/object_extraction/mesh_object_extractor.cpp
@@ -80,7 +78,6 @@ target_link_libraries(
 ${PROJECT_NAME}
         PUBLIC ${OpenCV_LIBRARIES}
         config_utilities::config_utilities
-        dynamic_psg::dynamic_psg
         spark_dsg::spark_dsg
         gtsam
         spatial_hash::spatial_hash
@@ -91,14 +88,6 @@ ${PROJECT_NAME}
 set_property(TARGET ${PROJECT_NAME} PROPERTY POSITION_INDEPENDENT_CODE ON)
 add_library(khronos::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
-if(BUILD_TESTING)
-  enable_testing()
-  find_package(GTest REQUIRED)
-  # The detector's own tests live in dynamic_psg; this checks the Hydra adapter.
-  add_executable(test_optical_flow_dynamics_adapter tests/test_optical_flow_dynamics_adapter.cpp)
-  target_link_libraries(test_optical_flow_dynamics_adapter PRIVATE ${PROJECT_NAME} GTest::gtest_main)
-  add_test(NAME optical_flow_dynamics_adapter COMMAND test_optical_flow_dynamics_adapter)
-endif()
 
 ##########
 # Export #

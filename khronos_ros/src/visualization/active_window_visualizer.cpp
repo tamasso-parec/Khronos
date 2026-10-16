@@ -46,7 +46,6 @@
 
 #include "khronos_ros/utils/ros_conversions.h"
 #include "khronos_ros/visualization/visualization_utils.h"
-#include <dynamic_psg_ros/conversions.h>
 
 namespace khronos {
 namespace {
@@ -96,21 +95,6 @@ ActiveWindowVisualizer::ActiveWindowVisualizer(const Config& config, const ianvs
   tracking_slice_pub_ = nh_.create_publisher<Marker>("tracking_slice", config.queue_size);
   dynamic_points_pub_ = nh_.create_publisher<Marker>("dynamic_points", config.queue_size);
   dynamic_image_pub_ = nh_.create_publisher<ImageMsg>("dynamic_image", config.queue_size);
-  dynamics_probability_pub_ =
-      nh_.create_publisher<ImageMsg>("dynamics_probability", config.queue_size);
-  dynamics_motion_evidence_pub_ = nh_.create_publisher<ImageMsg>("dynamics_motion_evidence", config.queue_size);
-  dynamics_regularized_pub_ = nh_.create_publisher<ImageMsg>("dynamics_regularized_evidence", config.queue_size);
-  dynamics_evidence_pub_ = nh_.create_publisher<ImageMsg>("dynamics_evidence", config.queue_size);
-  dynamics_reliability_pub_ = nh_.create_publisher<ImageMsg>("dynamics_reliability", config.queue_size);
-  dynamics_validity_pub_ = nh_.create_publisher<ImageMsg>("dynamics_validity", config.queue_size);
-  dynamics_failure_flags_pub_ =
-      nh_.create_publisher<ImageMsg>("dynamics_failure_flags", config.queue_size);
-  dynamics_failures_pub_ =
-      nh_.create_publisher<ImageMsg>("dynamics_failures", config.queue_size);
-  dynamics_track_alive_pub_ =
-      nh_.create_publisher<ImageMsg>("dynamics_track_alive", config.queue_size);
-  dynamics_cloud_pub_ =
-      nh_.create_publisher<sensor_msgs::msg::PointCloud2>("dynamics_cloud", config.queue_size);
   object_image_pub_ = nh_.create_publisher<ImageMsg>("object_image", config.queue_size);
   semantic_image_pub_ = nh_.create_publisher<ImageMsg>("semantic_image", config.queue_size);
   prior_image_pub_ = nh_.create_publisher<ImageMsg>("prior_image", config.queue_size);
@@ -161,7 +145,6 @@ void ActiveWindowVisualizer::visualizeAllFrameData(const FrameData& data) const 
   Timer timer("visualize/active_window/frame_data", stamp_.nanoseconds());
   visualizeDynamicPoints(data);
   visualizeDynamicImage(data);
-  visualizeDynamicsProbability(data);
   visualizeObjectImage(data);
   visualizeSemanticImage(data);
   visualizePriorImage(data);
@@ -299,52 +282,6 @@ void ActiveWindowVisualizer::visualizeTrackPixels(const Tracks& tracks) const {
   if (!msg.markers.empty()) {
     track_pixels_pub_->publish(msg);
   }
-}
-
-void ActiveWindowVisualizer::visualizeDynamicsProbability(const FrameData& data) const {
-  if (!data.dynamics) {
-    return;
-  }
-  const auto& result = *data.dynamics;
-  std_msgs::msg::Header header;
-  header.stamp = rclcpp::Time(result.reference_timestamp_ns);
-  if (result.legacy_mode && dynamics_probability_pub_->get_subscription_count() > 0) {
-    cv_bridge::CvImage image(header, "32FC1", result.probability);
-    dynamics_probability_pub_->publish(*image.toImageMsg());
-  }
-  if (!result.legacy_mode) {
-    const auto publish = [&](const auto& publisher, const std::string& encoding, const cv::Mat& image) {
-      if (publisher->get_subscription_count() > 0) {
-        cv_bridge::CvImage msg(header, encoding, image);
-        publisher->publish(*msg.toImageMsg());
-      }
-    };
-    publish(dynamics_motion_evidence_pub_, "32FC1", result.motion_evidence);
-    publish(dynamics_regularized_pub_, "32FC1", result.regularized_evidence);
-    publish(dynamics_reliability_pub_, "32FC1", result.reliability);
-    publish(dynamics_validity_pub_, "mono8", result.validity);
-    if (dynamics_evidence_pub_->get_subscription_count() > 0) {
-      publish(dynamics_evidence_pub_, "rgb8", dynamic_psg::dynamicsEvidenceImage(result));
-    }
-  }
-  if (dynamics_failure_flags_pub_->get_subscription_count() > 0) {
-    cv_bridge::CvImage image(header, "16UC1", result.failure_flags);
-    dynamics_failure_flags_pub_->publish(*image.toImageMsg());
-  }
-  if (dynamics_track_alive_pub_->get_subscription_count() > 0) {
-    cv_bridge::CvImage image(header, "mono8", result.track_alive);
-    dynamics_track_alive_pub_->publish(*image.toImageMsg());
-  }
-  if (dynamics_failures_pub_->get_subscription_count() > 0) {
-    cv_bridge::CvImage image(header, "rgb8", dynamic_psg::dynamicsFailureImage(result));
-    dynamics_failures_pub_->publish(*image.toImageMsg());
-  }
-  if (dynamics_cloud_pub_->get_subscription_count() == 0) {
-    return;
-  }
-
-  header.frame_id = config.global_frame_name;
-  dynamics_cloud_pub_->publish(dynamic_psg::dynamicsCloud(result, header));
 }
 
 void ActiveWindowVisualizer::visualizeTrackingImage(const Tracks& tracks,

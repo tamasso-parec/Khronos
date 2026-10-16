@@ -58,8 +58,6 @@ void declare_config(ActiveWindow::Config& config) {
   field(config.tracking_integrator, "tracking_integrator");
   config.motion_detector.setOptional();
   field(config.motion_detector, "motion_detector");
-  config.dynamics_estimator.setOptional();
-  field(config.dynamics_estimator, "dynamics_estimator");
   config.object_detector.setOptional();
   field(config.object_detector, "object_detector");
   config.tracker.setOptional();
@@ -85,7 +83,6 @@ ActiveWindow::ActiveWindow(const Config& config, const OutputQueue::Ptr& output_
       sinks_(KhronosSink::instantiate(config.khronos_sinks)),
       frame_data_buffer_(config.frame_data_buffer) {
   // Create member processors as specified in the configs.
-  dynamics_estimator_ = config.dynamics_estimator.create();
   motion_detector_ = config.motion_detector.create();
   if (!motion_detector_) {
     motion_detector_ = std::make_unique<MotionDetector>();
@@ -134,15 +131,7 @@ hydra::ActiveWindowOutput::Ptr ActiveWindow::spinOnce(const hydra::InputPacket& 
   // Create a data package for the given input.
   std::shared_ptr<FrameData> data = createData(input);
   if (!data) {
-    if (dynamics_estimator_) {
-      dynamics_estimator_->reset();
-    }
     return nullptr;
-  }
-
-  if (dynamics_estimator_) {
-    Timer dynamics_timer("active_window/dynamics", latest_stamp_);
-    data->dynamics = dynamics_estimator_->processInput(data->input);
   }
 
   // Verify object priors against the current measurement and derive motion cues.

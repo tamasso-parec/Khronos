@@ -13,7 +13,6 @@ option(BUILD_SHARED_LIBS "Build shared libs" ON)
 
 find_package(ament_cmake REQUIRED)
 find_package(cv_bridge REQUIRED)
-find_package(dynamic_psg_ros REQUIRED)
 find_package(gflags REQUIRED)
 find_package(hydra_ros REQUIRED)
 find_package(khronos REQUIRED)
@@ -40,7 +39,7 @@ target_include_directories(
          "$<INSTALL_INTERFACE:include>"
 )
 target_link_libraries(${PROJECT_NAME} PUBLIC khronos::khronos hydra_ros::hydra_ros
-                      PRIVATE cv_bridge::cv_bridge dynamic_psg_ros::dynamic_psg_ros)
+                      PRIVATE cv_bridge::cv_bridge)
 ament_target_dependencies(${PROJECT_NAME} PUBLIC khronos_msgs sensor_msgs)
 
 # ##############################################################################
