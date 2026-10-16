@@ -6,6 +6,8 @@ launch:
   - arg: { name: rviz_path, default: $(find-pkg-share khronos_ros)/config/rviz/uHumans2.rviz }
   - arg: { name: labelspace_config }
   - arg: { name: extra_yaml, default: "{}" }
+  # Additional mapper settings that override the mapper config, e.g. "{active_window: {...}}".
+  - arg: { name: extra_mapper_yaml, default: "{}" }
   # System Args
   - arg: { name: publish_measurements, default: "false" }
   - arg: { name: sensor_min_range, default: "0.1" }
@@ -57,6 +59,7 @@ launch:
         --config-utilities-yaml {glog_level: $(var min_glog_level), glog_verbosity: $(var verbosity)}
         --config-utilities-yaml {experiment: {output_dir: $(var output_dir)}}
         --config-utilities-yaml $(var extra_yaml)
+        --config-utilities-yaml $(var extra_mapper_yaml)
         --config-utilities-yaml {backend: {fix_input_poses: $(var use_gt_frame)}}
         --config-utilities-yaml {input: {inputs: {left_cam: {sensor: {min_range: $(var sensor_min_range), max_range: $(var sensor_max_range), extrinsics: {sensor_frame: $(var sensor_frame)}}}}}}
         --config-utilities-yaml {sensor_frame: $(var sensor_frame)}
